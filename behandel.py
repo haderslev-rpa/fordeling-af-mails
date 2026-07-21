@@ -1,142 +1,136 @@
-async def behandel_page(item, session, page):
+"""
+FØRSTE WORKER-TEST
 
-    from q_haderslev_vbo.automation_server.ats_update_item_data import update_item_data
-    from q_haderslev_vbo.automation_server.ats_find_state import find_state
-    import logging
-    logger = logging.getLogger(__name__)
+Denne version bruges kun til at kontrollere:
 
-    data = item.data
+1. Worker kan hente et queue-item.
+2. box.mail findes.
+3. Reglerne er hentet fra Excel.
+4. Item-data kan opdateres gennem update_item_data.
 
-    """
-    PLAYWRIGHT – NY STANDARD (VIGTIGT):
+Der hentes endnu ingen attachments.
+Der udføres endnu ingen mailhandling.
+"""
 
-    - BrowserSession (objekt – browser-livscyklus) oprettes i main.py
-    - session gives IND i behandel_page som parameter
-    - behandel_page må:
-        ✅ bruge page.goto() (funktion – navigér)
-        ✅ tage screenshots via await session.recorder.screenshot(page=page,"cura_efter_login",always=True)
-        ✅ tage optage video via await session.recorder.start_recording(page=page, 10)
-    - behandel_page må IKKE:
-        ❌ oprette BrowserSession
-        ❌ lukke session eller browser 
-        ❌ bruge session.new_page() (funktion – ny fane) (kan godt være undtagelser)
-        ❌ have try/except/finally for Playwright
-        ❌Exception-håndtering, screenshots ved fejl og session.close() åndteres ALTID i main.py.
-    
-    SHAREPOINT LIST INTEGRATION
-    from q_haderslev_vbo.automation_server.ats_sharepoint import (
-    hent_sharepoint_list_item_til_box,
-    gem_sharepoint_list_item_til_box
-    )
+import logging
 
-    # HENT
-    hent_sharepoint_list_item_til_box(
-        site_name="Automatisering",
-        list_name="Test - Rune",
-        list_item_id=item.data["box"]["sharepoint"]["id"],
-        item=item
-    )
-
-    # GEM (UPDATE)
-    gem_sharepoint_list_item_til_box(
-        site_name="Automatisering",
-        list_name="Test - Rune",
-        sharepoint_data={
-            "id": item.data["box"]["sharepoint"]["id"],
-            "Robot kommentar": "Sag afsluttet"
-        },
-        item=item
+from automation_server_client import (
+    WorkItemError,
 )
-    behandel_page(item, session, page):
-    
-    Eksempel på hvordan sharepoint kan bruges
-  1. Læs data = item.data
-  2. Sørg for at box findes
-  3. (Evt.) hent SharePoint ind i box.sharepoint
-  4. Brug box + box.sharepoint til logik
-  5. Når noget ændres:
-       - opdatér box (lokalt)
-       - gem i SharePoint (via gem_..._til_box)
-  6. Opdatér states/status
-  7. Lad ATS gemme item.data
+
+from q_haderslev_vbo.automation_server.ats_update_item_data import (
+    update_item_data,
+)
+
+
+logger = logging.getLogger(__name__)
+
+
+# -------------------------------------------------
+# KONTROLLÉR ITEM.DATA
+# -------------------------------------------------
+
+def validate_item_data(item):
+    """
+    Kontrollerer den forventede item-struktur.
     """
 
-    # ==========================================================
-    # 🧠 STATES
-    # ==========================================================
-    class States:
-        SEND_BREV = "1.0 Brev sendt"
-        JOURNALISER_BREV = "1.5 Brev journaliseret"
-        AFSLUT_SAG = "2.0 Sag afsluttet"
+    data = item.data or {}
+
+    box = data.get("box")
+
+    if not isinstance(box, dict):
+        raise WorkItemError(
+            "Item mangler box."
+        )
+
+    mail = box.get("mail")
+
+    if not isinstance(mail, dict):
+        raise WorkItemError(
+            "Item mangler box.mail."
+        )
+
+    if not mail.get("mailbox"):
+        raise WorkItemError(
+            "Item mangler box.mail.mailbox."
+        )
+
+    if not mail.get("message_id"):
+        raise WorkItemError(
+            "Item mangler box.mail.message_id."
+        )
+
+    return data, mail
 
 
-    # ==========================================================
-    # 🔁 HELPERS
-    # ==========================================================
-    def mangler_state(state, step):
-        states = data.get("state", [])
+# -------------------------------------------------
+# BEHANDEL ÉT ITEM
+# -------------------------------------------------
 
-        match = next((s for s in states if state in s), None)
+async def behandel_page(
+    item,
+    rules,
+    debug=False,
+):
+    """
+    Første worker-test.
 
-        if match:
-            log_step(step, f'Skip "{match}"')
-            return False
+    Funktionen kontrollerer queue-item'et
+    og antallet af indlæste regler.
+    """
 
-        return True
+    data, mail = validate_item_data(
+        item
+    )
 
-    def set_state(state):
-        update_item_data(data, item=item, state=state)
+    logger.info(
+        "Worker har hentet mail-reference: %s",
+        mail.get("subject"),
+    )
 
-    def log_step(step, text):
-        logger.info(f"[{step}] {text}")
+    logger.info(
+        "%s regler er tilgængelige i worker",
+        len(rules),
+    )
 
+    if debug:
+        logger.info(
+            "Postkasse: %s",
+            mail.get("mailbox"),
+        )
 
-    # ==========================================================
-    step = "SEND_BREV"
-    # ==========================================================
-    state = getattr(States, step)
+        logger.info(
+            "Message ID: %s",
+            mail.get("message_id"),
+        )
 
-    if mangler_state(state, step):
+        if rules:
+            logger.info(
+                "Første regelnummer: %s",
+                rules[0].rule_number,
+            )
 
-        log_step(step, "Start")
+    # Vi opdaterer ikke state eller status endnu.
+    # Det sker først, når den egentlige behandling
+    # er implementeret.
 
-        data["box"]["brev_sendt_id"] = 123
-        log_step(step, f'ID sat: {data["box"]["brev_sendt_id"]}')
+    update_item_data(
+        data,
+        box_updates={
+            "loaded_rule_count": len(
+                rules
+            ),
+        },
+        item=item,
+    )
 
-        update_item_data(data, item=item)
-
-        set_state(state)
-
-
-    # ==========================================================
-    step = "JOURNALISER_BREV"
-    # ==========================================================
-    state = getattr(States, step)
-
-    if mangler_state(state, step):
-
-        log_step(step, "Start")
-
-        data["box"]["journal_id"] = 456
-        log_step(step, f'ID sat: {data["box"]["journal_id"]}')
-
-        update_item_data(data, item=item)
-
-        set_state(state)
-
-
-    # ==========================================================
-    step = "AFSLUT_SAG"
-    # ==========================================================
-    state = getattr(States, step)
-
-    if mangler_state(state, step):
-
-        log_step(step, "Start")
-
-        data["box"]["afslutnings_id"] = 789
-        log_step(step, f'ID sat: {data["box"]["afslutnings_id"]}')
-
-        update_item_data(data, item=item)
-
-        set_state(state)
+    return {
+        "mailbox": mail.get("mailbox"),
+        "message_id": mail.get(
+            "message_id"
+        ),
+        "loaded_rule_count": len(
+            rules
+        ),
+    }
