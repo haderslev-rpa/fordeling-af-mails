@@ -24,7 +24,6 @@ from q_outlook_api.functionality.mail_api import (
 from proces_konfiguration import (
     MAILBOXES,
     MAIL_LIMIT_PER_MAILBOX,
-    QUEUE_NAME,
     ROBOT_CATEGORY_MARKERS,
     ROBOT_RULE_NUMBER_MARKER,
     build_previous_forward_text,
@@ -38,26 +37,11 @@ logger = logging.getLogger(__name__)
 # DUBLETCHECK TIL SENERE
 # -------------------------------------------------
 
-def item_exists_in_queue(
-    queue_name,
-    item_id,
-):
+def item_exists_in_queue(item_id):
     """
-    Midlertidig kontrakt til den kommende
-    databasefunktion.
+    Midlertidig kontrakt til dubletkontrol.
 
-    Input:
-        queue_name:
-            Navnet på Automation Server-køen.
-
-        item_id:
-            Mailens fulde Graph message-id.
-
-    Forventet returværdi:
-        True hvis item findes.
-        False hvis item ikke findes.
-
-    Funktionen bruges ikke endnu.
+    Queue-navnet findes senere via Automation Server.
     """
 
     raise NotImplementedError(
@@ -222,6 +206,10 @@ def hent_mails_fra_postkasse(
 
     Body gemmes ikke i queue-itemet.
     """
+    logger.info(
+        "Henter mails fra den faktiske postkasse: %s",
+        mailbox_config.address,
+)
 
     return get_mails(
         user_mail=mailbox_config.address,

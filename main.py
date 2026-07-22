@@ -3,7 +3,7 @@ import logging
 import sys
 from pprint import pprint
 
-from behandel import behandel_page
+
 
 from automation_server_client import (
     AutomationServer,
@@ -16,13 +16,12 @@ from q_haderslev_vbo.automation_server.ats_update_item_data import (
     update_item_data,
 )
 
-from hent_mailregler_fra_sharepoint import (
-    get_mail_rules,
-)
 
 from hent_mails_til_queue import (
     hent_mails_til_queue,
 )
+
+
 
 
 # ------------------------------------------------------------
@@ -103,8 +102,9 @@ async def populate_queue(
         "%s mails tilføjet til workqueue",
         len(box_data_items),
     )
+
 # ------------------------------------------------------------
-# PROCESS-MODE
+# PROCESS-MODE (WORKER)
 # ------------------------------------------------------------
 
 async def process_workqueue(
@@ -112,7 +112,16 @@ async def process_workqueue(
     debug: bool,
 ):
     """
-    Henter regler én gang og behandler items.
+    Henter alle regler én gang og behandler items.
+
+    behandel.py:
+        Udfører procestrinnene.
+        Opdaterer box og states.
+        Returnerer slutbeskeden.
+
+    main.py:
+        Opdaterer status og status_code.
+        Afslutter item'et.
     """
 
     logger = logging.getLogger(__name__)
@@ -123,12 +132,33 @@ async def process_workqueue(
         debug,
     )
 
-    rules = get_mail_rules()
+    # --------------------------------------------------------
+    # WORKER-IMPORTS
+    #
+    # Importeres kun i worker-mode.
+    # --queue indlæser derfor ikke worker-filerne.
+    # --------------------------------------------------------
+
+    from behandel import behandel_page
+
+    from hent_mailregler_fra_sharepoint import (
+        get_all_mail_rules,
+    )
+
+    # --------------------------------------------------------
+    # HENT ALLE REGLER ÉN GANG
+    # --------------------------------------------------------
+
+    all_rules = get_all_mail_rules()
 
     logger.info(
         "%s regler blev hentet fra Excel",
-        len(rules),
+        len(all_rules),
     )
+
+    # --------------------------------------------------------
+    # BEHANDL ITEMS
+    # --------------------------------------------------------
 
     for item in workqueue:
         with item:
@@ -143,21 +173,39 @@ async def process_workqueue(
 
                 pprint(data)
 
-                await behandel_page(
+                process_result = await behandel_page(
                     item=item,
-                    rules=rules,
+                    all_rules=all_rules,
                     debug=debug,
                 )
 
+                # Slutbeskeden kommer fra behandel.py.
+                # Hvis resultatet mod forventning er tomt,
+                # bruges en neutral standardbesked.
+                status_message = (
+                    (
+                        process_result
+                        or {}
+                    ).get(
+                        "status_message"
+                    )
+                    or "Mail behandlet"
+                )
+
+                # Status og status_code sættes samlet,
+                # præcis som update_item_data kræver.
                 update_item_data(
                     data,
                     item=item,
-                    status="Completed",
+                    status=status_message,
                     status_code="Færdig",
                 )
 
                 item.update(data)
-                item.complete("Completed")
+
+                item.complete(
+                    "Completed"
+                )
 
             except WorkItemError as error:
                 logger.error(
@@ -177,7 +225,6 @@ async def process_workqueue(
 
                 raise
 
-
 # ------------------------------------------------------------
 # MAIN ENTRY POINT
 # ------------------------------------------------------------
@@ -195,9 +242,9 @@ if __name__ == "__main__":
         #
         # Kommentér linjen ud, hvis eksisterende
         # NEW items skal bevares.
-        workqueue.clear_workqueue(
-            WorkItemStatus.NEW
-        )
+        #workqueue.clear_workqueue(
+        #    WorkItemStatus.NEW
+        #)
 
         asyncio.run(
             populate_queue(

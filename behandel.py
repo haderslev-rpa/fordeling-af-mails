@@ -1,136 +1,854 @@
 """
-FØRSTE WORKER-TEST
+BEHANDLING AF ÉT QUEUE-ITEM
 
-Denne version bruges kun til at kontrollere:
+Denne fil følger Haderslevs standard for behandel.py.
 
-1. Worker kan hente et queue-item.
-2. box.mail findes.
-3. Reglerne er hentet fra Excel.
-4. Item-data kan opdateres gennem update_item_data.
+Procesrækkefølge:
 
-Der hentes endnu ingen attachments.
-Der udføres endnu ingen mailhandling.
+1.0 - Mail hentet
+2.0 - Vedhæftninger hentet
+3.0 - Filindhold læst
+3.2 - Maksimalt antal Azure-forsøg nået
+4.0 - Regler vurderet
+5.0 - Mail behandlet
+
+VIGTIGT:
+
+- Mailens body gemmes ikke i item.data.
+- Vedhæftningernes bytes gemmes ikke i item.data.
+- Udlæst dokumenttekst gemmes ikke i item.data.
+- CPR-nummeret gemmes aldrig.
+- Kun den vindende regels resultat gemmes i box.
+- Mailhandlingen er simuleret i denne version.
+- behandel.py sætter ikke status.
+- behandel.py sætter ikke status_code.
+- main.py sætter status og status_code til sidst.
 """
 
-import logging
-
-from automation_server_client import (
-    WorkItemError,
-)
-
-from q_haderslev_vbo.automation_server.ats_update_item_data import (
-    update_item_data,
-)
-
-
-logger = logging.getLogger(__name__)
-
-
-# -------------------------------------------------
-# KONTROLLÉR ITEM.DATA
-# -------------------------------------------------
-
-def validate_item_data(item):
-    """
-    Kontrollerer den forventede item-struktur.
-    """
-
-    data = item.data or {}
-
-    box = data.get("box")
-
-    if not isinstance(box, dict):
-        raise WorkItemError(
-            "Item mangler box."
-        )
-
-    mail = box.get("mail")
-
-    if not isinstance(mail, dict):
-        raise WorkItemError(
-            "Item mangler box.mail."
-        )
-
-    if not mail.get("mailbox"):
-        raise WorkItemError(
-            "Item mangler box.mail.mailbox."
-        )
-
-    if not mail.get("message_id"):
-        raise WorkItemError(
-            "Item mangler box.mail.message_id."
-        )
-
-    return data, mail
-
-
-# -------------------------------------------------
-# BEHANDEL ÉT ITEM
-# -------------------------------------------------
 
 async def behandel_page(
     item,
-    rules,
+    all_rules,
     debug=False,
 ):
     """
-    Første worker-test.
+    Behandler ét queue-item.
 
-    Funktionen kontrollerer queue-item'et
-    og antallet af indlæste regler.
+    item:
+        Det aktuelle Automation Server-item.
+
+    all_rules:
+        Alle regler fra alle Excel-regelark.
+        Reglerne er hentet én gang i main.py.
+
+    debug:
+        Styrer ekstra logning.
     """
 
-    data, mail = validate_item_data(
-        item
+    from q_haderslev_vbo.automation_server.ats_update_item_data import (
+        update_item_data,
     )
 
-    logger.info(
-        "Worker har hentet mail-reference: %s",
-        mail.get("subject"),
+    from q_haderslev_vbo.automation_server.ats_find_state import (
+        find_state,
     )
 
-    logger.info(
-        "%s regler er tilgængelige i worker",
-        len(rules),
+    from q_outlook_api.functionality.mail_api import (
+        MailNotFoundError,
+        get_attachments,
+        get_mails,
     )
 
-    if debug:
-        logger.info(
-            "Postkasse: %s",
-            mail.get("mailbox"),
+    from hent_mailregler_fra_sharepoint import (
+        get_rules_for_mailbox,
+    )
+
+    from laes_filindhold import (
+        read_attachment_contents,
+    )
+
+    from udfoer_mailhandling import (
+        execute_mail_action,
+    )
+
+    from vurder_mail_mod_regler import (
+        select_winning_rule,
+    )
+
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    data = item.data
+
+
+    # ==========================================================
+    # 🧠 STATES
+    # ==========================================================
+
+    class States:
+        MAIL_HENTET = (
+            "1.0 - Mail hentet"
         )
 
-        logger.info(
-            "Message ID: %s",
-            mail.get("message_id"),
+        VEDHAEFTNINGER_HENTET = (
+            "2.0 - Vedhæftninger hentet"
         )
 
-        if rules:
-            logger.info(
-                "Første regelnummer: %s",
-                rules[0].rule_number,
+        FILINDHOLD_LAEST = (
+            "3.0 - Filindhold læst"
+        )
+
+        AZURE_FORSOEG_NAAET = (
+            "3.2 - Maksimalt antal Azure-forsøg nået"
+        )
+
+        REGLER_VURDERET = (
+            "4.0 - Regler vurderet"
+        )
+
+        MAIL_BEHANDLET = (
+            "5.0 - Mail behandlet"
+        )
+
+
+    # ==========================================================
+    # 🔁 HELPERS
+    # ==========================================================
+
+    def mangler_state(
+        state,
+        step,
+    ):
+        """
+        Kontrollerer om en state mangler.
+
+        Hvis state allerede findes, bliver
+        procestrinnet logget som sprunget over.
+        """
+
+        states = data.get(
+            "state",
+            [],
+        )
+
+        match = next(
+            (
+                existing_state
+                for existing_state in states
+                if state in existing_state
+            ),
+            None,
+        )
+
+        if match:
+            log_step(
+                step,
+                f'Skip "{match}"',
             )
 
-    # Vi opdaterer ikke state eller status endnu.
-    # Det sker først, når den egentlige behandling
-    # er implementeret.
+            return False
 
-    update_item_data(
+        return True
+
+
+    def set_state(state):
+        """
+        Tilføjer state gennem standardfunktionen.
+        """
+
+        update_item_data(
+            data,
+            item=item,
+            state=state,
+        )
+
+
+    def log_step(
+        step,
+        text,
+    ):
+        """
+        Skriver en ensartet logbesked.
+        """
+
+        logger.info(
+            f"[{step}] {text}"
+        )
+
+
+    # ==========================================================
+    # INPUT FRA ITEM.DATA
+    # ==========================================================
+
+    mailbox = data["box"]["mail"][
+        "mailbox"
+    ]
+
+    message_id = data["box"]["mail"][
+        "message_id"
+    ]
+
+
+    # ==========================================================
+    # KONTROLLÉR OM MAILEN ALLEREDE ER BEHANDLET
+    # ==========================================================
+
+    if find_state(
         data,
-        box_updates={
-            "loaded_rule_count": len(
-                rules
+        States.MAIL_BEHANDLET,
+    ):
+        log_step(
+            "MAIL_BEHANDLET",
+            f'Skip "{States.MAIL_BEHANDLET}"',
+        )
+
+        return {
+            "already_processed": True,
+            "mail_found": None,
+            "rules_checked": 0,
+            "attachments_read": 0,
+            "file_results_count": 0,
+            "rule_result": None,
+            "action_result": {
+                "action": data[
+                    "box"
+                ].get("action"),
+                "destination": data[
+                    "box"
+                ].get("destination"),
+                "status_message": (
+                    "Mailen var allerede behandlet"
+                ),
+                "simulated": True,
+            },
+            "status_message": (
+                "Mailen var allerede behandlet"
             ),
-        },
-        item=item,
+        }
+
+
+    # ==========================================================
+    # FILTRÉR REGLER TIL POSTKASSEN
+    # ==========================================================
+
+    rules = get_rules_for_mailbox(
+        all_rules=all_rules,
+        item_mailbox=mailbox,
     )
 
+    logger.info(
+        "[REGLER] %s regler valgt for %s",
+        len(rules),
+        mailbox,
+    )
+
+
+    # ==========================================================
+    # MELLEMRESULTATER I HUKOMMELSEN
+    # ==========================================================
+
+    mail = None
+
+    attachments = []
+
+    file_results = []
+
+    rule_result = None
+
+    action_result = None
+
+
+    # ==========================================================
+    step = "MAIL_HENTET"
+    # ==========================================================
+    state = getattr(
+        States,
+        step,
+    )
+
+    if mangler_state(
+        state,
+        step,
+    ):
+
+        log_step(
+            step,
+            "Start",
+        )
+
+        try:
+            mails = get_mails(
+                user_mail=mailbox,
+                message_id=message_id,
+                include_attachments=True,
+                get_inline=False,
+                prefer_plain_text=True,
+            )
+
+        except MailNotFoundError:
+            mails = []
+
+        if not mails:
+            data["box"]["action"] = (
+                "mail_not_found"
+            )
+
+            data["box"]["destination"] = None
+
+            log_step(
+                step,
+                (
+                    "Mailen findes ikke længere "
+                    "i Outlook"
+                ),
+            )
+
+            update_item_data(
+                data,
+                item=item,
+            )
+
+            set_state(
+                States.MAIL_BEHANDLET
+            )
+
+            return {
+                "already_processed": False,
+                "mail_found": False,
+                "rules_checked": 0,
+                "attachments_read": 0,
+                "file_results_count": 0,
+                "rule_result": None,
+                "action_result": {
+                    "action": (
+                        "mail_not_found"
+                    ),
+                    "destination": None,
+                    "status_message": (
+                        "Mailen findes ikke længere "
+                        "i Outlook"
+                    ),
+                    "simulated": True,
+                },
+                "status_message": (
+                    "Mailen findes ikke længere "
+                    "i Outlook"
+                ),
+            }
+
+        mail = mails[0]
+
+        log_step(
+            step,
+            (
+                "Mail hentet: "
+                f'{mail.get("subject") or ""}'
+            ),
+        )
+
+        set_state(state)
+
+    else:
+        # Mailens body gemmes ikke i item.data.
+        #
+        # Mailen skal derfor hentes igen til
+        # hukommelsen ved en genkørsel.
+
+        try:
+            mails = get_mails(
+                user_mail=mailbox,
+                message_id=message_id,
+                include_attachments=True,
+                get_inline=False,
+                prefer_plain_text=True,
+            )
+
+        except MailNotFoundError:
+            mails = []
+
+        if not mails:
+            data["box"]["action"] = (
+                "mail_not_found"
+            )
+
+            data["box"]["destination"] = None
+
+            log_step(
+                step,
+                (
+                    "Mailen findes ikke længere "
+                    "i Outlook"
+                ),
+            )
+
+            update_item_data(
+                data,
+                item=item,
+            )
+
+            set_state(
+                States.MAIL_BEHANDLET
+            )
+
+            return {
+                "already_processed": False,
+                "mail_found": False,
+                "rules_checked": 0,
+                "attachments_read": 0,
+                "file_results_count": 0,
+                "rule_result": None,
+                "action_result": {
+                    "action": (
+                        "mail_not_found"
+                    ),
+                    "destination": None,
+                    "status_message": (
+                        "Mailen findes ikke længere "
+                        "i Outlook"
+                    ),
+                    "simulated": True,
+                },
+                "status_message": (
+                    "Mailen findes ikke længere "
+                    "i Outlook"
+                ),
+            }
+
+        mail = mails[0]
+
+
+    # ==========================================================
+    step = "VEDHAEFTNINGER_HENTET"
+    # ==========================================================
+    state = getattr(
+        States,
+        step,
+    )
+
+    if mangler_state(
+        state,
+        step,
+    ):
+
+        log_step(
+            step,
+            "Start",
+        )
+
+        attachments = get_attachments(
+            user_mail=mailbox,
+            message_id=message_id,
+            get_inline=False,
+        )
+
+        log_step(
+            step,
+            (
+                f"{len(attachments)} "
+                "vedhæftninger hentet"
+            ),
+        )
+
+        if debug:
+            for attachment in attachments:
+                log_step(
+                    step,
+                    (
+                        "Fil: "
+                        f'{attachment.get("name")}. '
+                        "Type: "
+                        f'{attachment.get("attachment_type")}. '
+                        "Størrelse: "
+                        f'{attachment.get("size")}.'
+                    ),
+                )
+
+        set_state(state)
+
+    else:
+        # Attachment-bytes gemmes ikke i item.data.
+        #
+        # Vedhæftningerne skal derfor hentes igen
+        # til hukommelsen ved en genkørsel.
+
+        attachments = get_attachments(
+            user_mail=mailbox,
+            message_id=message_id,
+            get_inline=False,
+        )
+
+
+    # ==========================================================
+    step = "FILINDHOLD_LAEST"
+    # ==========================================================
+    state = getattr(
+        States,
+        step,
+    )
+
+    if mangler_state(
+        state,
+        step,
+    ):
+
+        log_step(
+            step,
+            "Start",
+        )
+
+        file_results = (
+            read_attachment_contents(
+                attachments=attachments,
+                item=item,
+            )
+        )
+
+        log_step(
+            step,
+            (
+                f"{len(file_results)} "
+                "filer gennemgået"
+            ),
+        )
+
+        if debug:
+            for file_result in file_results:
+                log_step(
+                    step,
+                    (
+                        "Fil: "
+                        f'{file_result.get("name")}. '
+                        "Metode: "
+                        f'{file_result.get("read_method")}. '
+                        "Success: "
+                        f'{file_result.get("success")}. '
+                        "Azure: "
+                        f'{file_result.get("azure_used")}.'
+                    ),
+                )
+
+                if file_result.get("error"):
+                    log_step(
+                        step,
+                        (
+                            "Filfejl: "
+                            f'{file_result.get("error")}'
+                        ),
+                    )
+
+        set_state(state)
+
+    else:
+        # pypdf skal læse filerne igen ved
+        # hvert worker-forsøg.
+        #
+        # Filtekst gemmes ikke i item.data.
+
+        file_results = (
+            read_attachment_contents(
+                attachments=attachments,
+                item=item,
+            )
+        )
+
+
+    # ==========================================================
+    # KONTROLLÉR AZURE-GRÆNSE
+    # ==========================================================
+
+    azure_limit_reached = any(
+        (
+            file_result.get(
+                "azure_limit_reached",
+                False,
+            )
+            or file_result.get(
+                "read_method"
+            ) == "azure_limit_reached"
+        )
+        for file_result in file_results
+    )
+
+    if azure_limit_reached:
+
+        # ==========================================================
+        step = "AZURE_FORSOEG_NAAET"
+        # ==========================================================
+        state = getattr(
+            States,
+            step,
+        )
+
+        if mangler_state(
+            state,
+            step,
+        ):
+
+            log_step(
+                step,
+                (
+                    "Maksimalt antal "
+                    "Azure-forsøg nået"
+                ),
+            )
+
+            set_state(state)
+
+
+    # ==========================================================
+    step = "REGLER_VURDERET"
+    # ==========================================================
+    state = getattr(
+        States,
+        step,
+    )
+
+    if mangler_state(
+        state,
+        step,
+    ):
+
+        log_step(
+            step,
+            "Start",
+        )
+
+        rule_result = select_winning_rule(
+            rules=rules,
+            mail=mail,
+            file_results=file_results,
+        )
+
+        data["box"]["subject_points"] = (
+            rule_result.get(
+                "subject_points",
+                0,
+            )
+        )
+
+        data["box"]["subject_match"] = (
+            rule_result.get(
+                "subject_match",
+                "",
+            )
+        )
+
+        data["box"]["message_points"] = (
+            rule_result.get(
+                "message_points",
+                0,
+            )
+        )
+
+        data["box"]["message_match"] = (
+            rule_result.get(
+                "message_match",
+                "",
+            )
+        )
+
+        data["box"]["sender_points"] = (
+            rule_result.get(
+                "sender_points",
+                0,
+            )
+        )
+
+        data["box"]["sender_match"] = (
+            rule_result.get(
+                "sender_match",
+                "",
+            )
+        )
+
+        data["box"]["file_name_points"] = (
+            rule_result.get(
+                "file_name_points",
+                0,
+            )
+        )
+
+        data["box"]["file_name_match"] = (
+            rule_result.get(
+                "file_name_match",
+                "",
+            )
+        )
+
+        data["box"][
+            "file_content_points"
+        ] = rule_result.get(
+            "file_content_points",
+            0,
+        )
+
+        data["box"][
+            "file_content_match"
+        ] = rule_result.get(
+            "file_content_match",
+            "",
+        )
+
+        data["box"]["cpr_points"] = (
+            rule_result.get(
+                "cpr_points",
+                0,
+            )
+        )
+
+        data["box"]["cpr_found"] = bool(
+            rule_result.get(
+                "cpr_found",
+                False,
+            )
+        )
+
+        data["box"]["rule_number"] = (
+            rule_result.get(
+                "rule_number"
+            )
+        )
+
+        data["box"]["total_points"] = (
+            rule_result.get(
+                "total_points",
+                0,
+            )
+        )
+
+        log_step(
+            step,
+            (
+                "Regelnummer: "
+                f'{data["box"]["rule_number"]}. '
+                "Total point: "
+                f'{data["box"]["total_points"]}.'
+            ),
+        )
+
+        update_item_data(
+            data,
+            item=item,
+        )
+
+        set_state(state)
+
+    else:
+        # Regelresultatet beregnes igen til
+        # den simulerede mailhandling.
+        #
+        # Kun vinderens felter er gemt i box.
+
+        rule_result = select_winning_rule(
+            rules=rules,
+            mail=mail,
+            file_results=file_results,
+        )
+
+
+    # ==========================================================
+    step = "MAIL_BEHANDLET"
+    # ==========================================================
+    state = getattr(
+        States,
+        step,
+    )
+
+    if mangler_state(
+        state,
+        step,
+    ):
+
+        log_step(
+            step,
+            "Start",
+        )
+
+        action_result = execute_mail_action(
+            mail=data["box"]["mail"],
+            rule_result=rule_result,
+        )
+
+        data["box"]["action"] = (
+            action_result.get(
+                "action"
+            )
+        )
+
+        data["box"]["destination"] = (
+            action_result.get(
+                "destination"
+            )
+        )
+
+        log_step(
+            step,
+            (
+                "Simuleret handling: "
+                f'{data["box"]["action"]}. '
+                "Destination: "
+                f'{data["box"]["destination"]}.'
+            ),
+        )
+
+        update_item_data(
+            data,
+            item=item,
+        )
+
+        set_state(state)
+
+    else:
+        action_result = {
+            "action": data[
+                "box"
+            ].get("action"),
+            "destination": data[
+                "box"
+            ].get("destination"),
+            "status_message": (
+                "Mailen var allerede behandlet"
+            ),
+            "simulated": True,
+        }
+
+
+    # ==========================================================
+    # RETURNÉR RESULTAT TIL MAIN.PY
+    # ==========================================================
+
     return {
-        "mailbox": mail.get("mailbox"),
-        "message_id": mail.get(
-            "message_id"
-        ),
-        "loaded_rule_count": len(
+        "already_processed": False,
+
+        "mail_found": True,
+
+        "rules_checked": len(
             rules
+        ),
+
+        "attachments_read": len(
+            attachments
+        ),
+
+        "file_results_count": len(
+            file_results
+        ),
+
+        "rule_result": (
+            rule_result
+        ),
+
+        "action_result": (
+            action_result
+        ),
+
+        # main.py bruger denne værdi
+        # til den afsluttende status.
+        "status_message": (
+            action_result.get(
+                "status_message"
+            )
+            or "Mail behandlet"
         ),
     }

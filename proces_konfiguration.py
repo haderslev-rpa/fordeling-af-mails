@@ -1,23 +1,62 @@
 """
 CENTRAL KONFIGURATION
 
-Denne fil indeholder faste indstillinger til processen.
+TEST_MAILBOX_OVERRIDE:
+    Bestemmer hvilken Outlook-postkasse mails hentes fra.
 
-Credentials må ikke placeres i denne fil.
+RULE_MAILBOX_OVERRIDE:
+    Bestemmer hvilken postkasses Excel-regler worker bruger.
+
+Eksempel i .env:
+
+TEST_MAILBOX_OVERRIDE=robot-data@haderslev.dk
+RULE_MAILBOX_OVERRIDE=jobcenter@haderslev.dk
+
+Det betyder:
+
+Mails hentes fra:
+robot-data@haderslev.dk
+
+Regler hentes som om mailen tilhører:
+jobcenter@haderslev.dk
 """
 
 import os
 from dataclasses import dataclass
 
+from dotenv import load_dotenv
+
 
 # -------------------------------------------------
-# POSTKASSEKONFIGURATION
+# INDLÆS .ENV
+# -------------------------------------------------
+
+load_dotenv()
+
+
+# -------------------------------------------------
+# TESTOVERRIDES
+# -------------------------------------------------
+
+TEST_MAILBOX_OVERRIDE = os.getenv(
+    "TEST_MAILBOX_OVERRIDE",
+    "",
+).strip()
+
+RULE_MAILBOX_OVERRIDE = os.getenv(
+    "RULE_MAILBOX_OVERRIDE",
+    "",
+).strip()
+
+
+# -------------------------------------------------
+# POSTKASSER
 # -------------------------------------------------
 
 @dataclass(frozen=True)
 class MailboxConfig:
     """
-    Konfiguration for én postkasse.
+    Konfiguration for én Outlook-postkasse.
     """
 
     address: str
@@ -27,7 +66,10 @@ class MailboxConfig:
 
 MAILBOXES = [
     MailboxConfig(
-        address="jobcenter@haderslev.dk",
+        address=(
+            TEST_MAILBOX_OVERRIDE
+            or "jobcenter@haderslev.dk"
+        ),
         folder="inbox",
         enabled=True,
     ),
@@ -41,33 +83,13 @@ MAILBOXES = [
 ]
 
 
-# -------------------------------------------------
-# QUEUE
-# -------------------------------------------------
-
-QUEUE_NAME = os.getenv(
-    "MAIL_QUEUE_NAME",
-    "Fordeling af mails",
-)
-
-# None betyder, at Graph-pagination fortsætter,
-# indtil alle mails er hentet.
-MAIL_LIMIT_PER_MAILBOX = None
-
-
-# -------------------------------------------------
-# SHAREPOINT OG EXCEL
-# -------------------------------------------------
-
-RULES_SITE_NAME = "Automatisering"
-
-RULES_FILE_PATH = (
-    "RPA - Processer/"
-    "Fordeling af mails/"
-    "Fællespostkasse - regler til emails.xlsx"
-)
-
-RULES_SHEET_NAME = "Regler"
+# Brug et lille tal under test.
+#
+# Eksempel:
+# MAIL_LIMIT_PER_MAILBOX = 5
+#
+# None betyder, at alle mails hentes.
+MAIL_LIMIT_PER_MAILBOX = 200
 
 
 # -------------------------------------------------
@@ -90,8 +112,10 @@ ROBOT_RULE_NUMBER_MARKER = "Regelnr:"
 
 def build_previous_forward_text(mailbox):
     """
-    Bygger Blue Prism-teksten til kontrol af
-    tidligere robotvideresendelse.
+    Bygger kontrolteksten fra Blue Prism.
+
+    Teksten bruges til at undgå, at robotten
+    behandler tidligere videresendte mails igen.
     """
 
     return (
@@ -103,27 +127,20 @@ def build_previous_forward_text(mailbox):
 
 
 # -------------------------------------------------
-# REGELSTATUS
+# REGLER
 # -------------------------------------------------
 
 RULE_STATUS_ACTIVE = "Aktiv"
+
 RULE_STATUS_INACTIVE = "Inaktiv"
+
 RULE_STATUS_TEST = "Test"
 
-
-# -------------------------------------------------
-# REGELTYPE
-# -------------------------------------------------
-
 RULE_TYPE_MAIN = "Hovedregel"
+
 RULE_TYPE_ADDITIONAL = "Tillægsregel"
 
-
-# -------------------------------------------------
-# POINT
-# -------------------------------------------------
-
-RULE_MINIMUM_POINTS = 300
+RULE_FORWARD_MINIMUM_POINTS = 300
 
 
 # -------------------------------------------------
@@ -132,29 +149,3 @@ RULE_MINIMUM_POINTS = 300
 
 MAX_AZURE_ATTEMPTS_PER_ITEM = 50
 
-
-# -------------------------------------------------
-# STATES TIL SENERE WORKER-BEHANDLING
-# -------------------------------------------------
-
-STATE_MAIL_FETCHED = "1.0 - Mail hentet"
-
-STATE_ATTACHMENTS_FETCHED = (
-    "2.0 - Vedhæftninger hentet"
-)
-
-STATE_FILE_CONTENT_READ = (
-    "3.0 - Filindhold læst"
-)
-
-STATE_AZURE_LIMIT_REACHED = (
-    "3.2 - Maksimalt antal Azure-forsøg nået"
-)
-
-STATE_RULES_EVALUATED = (
-    "4.0 - Regler vurderet"
-)
-
-STATE_MAIL_PROCESSED = (
-    "5.0 - Mail behandlet"
-)
