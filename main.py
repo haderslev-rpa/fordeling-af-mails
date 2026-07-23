@@ -259,21 +259,33 @@ async def process_workqueue(
 # ------------------------------------------------------------
 
 if __name__ == "__main__":
+
     DEBUG = "--debug" in sys.argv
-    QUEUE_MODE = "--queue" in sys.argv
+
+    QUEUE_MODE = (
+        "--queue" in sys.argv
+    )
+
+    QUEUE_AND_PROCESS_MODE = (
+        "--queue-and-process"
+        in sys.argv
+    )
 
     ats = AutomationServer.from_environment()
+
     workqueue = ats.workqueue()
 
-    if QUEUE_MODE:
+    if QUEUE_MODE or QUEUE_AND_PROCESS_MODE:
+
         # VIGTIGT:
         # Denne linje sletter alle NEW items.
         #
         # Kommentér linjen ud, hvis eksisterende
         # NEW items skal bevares.
-        #workqueue.clear_workqueue(
-        #    WorkItemStatus.NEW
-        #)
+        #
+        # workqueue.clear_workqueue(
+        #     WorkItemStatus.NEW
+        # )
 
         asyncio.run(
             populate_queue(
@@ -282,7 +294,10 @@ if __name__ == "__main__":
             )
         )
 
-        sys.exit(0)
+        # Stop kun hvis det er ren queue-mode
+        if QUEUE_MODE:
+
+            sys.exit(0)
 
     asyncio.run(
         process_workqueue(
