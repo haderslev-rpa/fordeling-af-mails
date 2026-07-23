@@ -11,6 +11,7 @@ dependencies = [
     "q-outlook-api",
     "q-sharepoint-api",
     "q-excel",
+    "q-azure-vision-api",
     "pypdf>=6.0.0",
 ]
 
@@ -21,4 +22,5 @@ q-haderslev-vbo = { git = "https://github.com/haderslev-rpa/q-haderslev-vbo.git"
 q-outlook-api = { git = "https://github.com/haderslev-rpa/q-outlook-api.git"}
 q-sharepoint-api = { git = "https://github.com/haderslev-rpa/q-sharepoint-api.git"}
 q-excel = { git = "https://github.com/haderslev-rpa/q-excel.git"}
+q-azure-vision-api = { git = "https://github.com/haderslev-rpa/q-azure-vision-api.git"}
 

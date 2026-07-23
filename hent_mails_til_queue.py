@@ -330,6 +330,19 @@ def hent_mails_til_queue():
                 box_data
             )
 
+    # -------------------------------------------------
+    # SORTÉR ÆLDSTE MAIL FØRST
+    # -------------------------------------------------
+
+    box_data_items.sort(
+        key=lambda item: (
+            item["mail"].get(
+                "received_datetime_utc"
+            )
+            or ""
+        )
+    )
+
     logger.info(
         (
             "Mailhentning færdig. "

@@ -87,6 +87,16 @@ RULE_SOURCES = [
         ),
         sheet_name="Regler",
     ),
+       RuleSource(
+            mailbox="post@haderslev.dk",
+            site_name="Automatisering",
+            file_path=(
+                "RPA - Processer/"
+                "Fordeling af mails/"
+                "Borgerservice - regler til emails.xlsx"
+            ),
+            sheet_name="Regler",
+        ),
 
     # Tilføj flere regelark her senere.
     #

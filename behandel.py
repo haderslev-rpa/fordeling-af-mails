@@ -68,7 +68,8 @@ async def behandel_page(
     )
 
     from udfoer_mailhandling import (
-        execute_mail_action,
+    execute_mail_action,
+    build_comparison_message,
     )
 
     from vurder_mail_mod_regler import (
@@ -770,6 +771,17 @@ async def behandel_page(
             rule_result=rule_result,
         )
 
+        comparison_message = (
+            build_comparison_message(
+            rule_result=rule_result,
+            action_result=action_result,
+        )
+        )
+        data["box"][
+            "comparison_message"
+        ] = comparison_message
+
+
         data["box"]["action"] = (
             action_result.get(
                 "action"
@@ -841,6 +853,10 @@ async def behandel_page(
 
         "action_result": (
             action_result
+        ),
+
+        "comparison_message": (
+        comparison_message
         ),
 
         # main.py bruger denne værdi

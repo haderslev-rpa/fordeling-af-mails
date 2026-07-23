@@ -218,3 +218,76 @@ def execute_mail_action(
         ),
         "simulated": True,
     }
+
+# -------------------------------------------------
+# BUILD COMPARISON MESSAGE
+# -------------------------------------------------
+
+def build_comparison_message(
+    rule_result,
+    action_result,
+):
+    """
+    Bygger samme type tekst som
+    Blue Prism lægger i Tag.
+
+    Bruges til sammenligning
+    mellem Blue Prism og Python.
+    """
+
+    rule_number = (
+        rule_result.get(
+            "rule_number"
+        )
+    )
+
+    total_points = (
+        rule_result.get(
+            "total_points",
+            0,
+        )
+    )
+
+    destination = (
+        action_result.get(
+            "destination"
+        )
+    )
+
+    action = (
+        action_result.get(
+            "action"
+        )
+    )
+
+    # ---------------------------------------------
+    # REGLEN MATCHER
+    # ---------------------------------------------
+
+    if rule_number:
+
+        message = (
+            f"Nr: {rule_number}"
+        )
+
+        if destination:
+
+            message += (
+                f" + {destination}"
+            )
+
+        elif action:
+
+            message += (
+                f" + {action}"
+            )
+
+        return message
+
+    # ---------------------------------------------
+    # INGEN REGEL MATCHER
+    # ---------------------------------------------
+
+    return (
+        f"Point: {total_points}"
+    )

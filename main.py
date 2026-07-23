@@ -15,6 +15,9 @@ from automation_server_client import (
 from q_haderslev_vbo.automation_server.ats_update_item_data import (
     update_item_data,
 )
+from q_haderslev_vbo.automation_server.ats_is_item_in_queue import (
+    is_item_in_queue,
+)
 
 
 from hent_mails_til_queue import (
@@ -81,27 +84,46 @@ async def populate_queue(
             update=False,
         )
 
-        workqueue.add_item(
-            data=data_json,
-            reference=(
-                data_json["box"]["mail"]["received_datetime_danish"]
-                + " - "
-                + data_json["box"]["mail"]["mailbox"]
-                + " - "
-                + data_json["box"]["mail"]["subject"][:50]
-            ),
+        item_reference = (
+            data_json["box"]["mail"][
+                "received_datetime_danish"
+            ]
+            + " - "
+            + data_json["box"]["mail"][
+                "mailbox"
+            ]
+            + " - "
+            + data_json["box"]["mail"][
+                "subject"
+            ][:50]
         )
 
-        if debug:
+        if is_item_in_queue(
+            queue_id=workqueue.id,
+            item_reference=item_reference,
+            new=True,
+            in_progress=True,
+            completed=True,
+            failed=True,
+            pending_user_action=True,
+        ):
             logger.info(
-                "Mail tilføjet til queue: %s",
-                data_json["box"]["mail"]["subject"],
+                "Springer over. "
+                "Reference findes allerede: %s",
+                item_reference,
             )
 
-    logger.info(
-        "%s mails tilføjet til workqueue",
-        len(box_data_items),
-    )
+            continue
+
+        workqueue.add_item(
+            data=data_json,
+            reference=item_reference,
+        )
+
+        logger.info(
+            "Item tilføjet: %s",
+            item_reference,
+        )
 
 # ------------------------------------------------------------
 # PROCESS-MODE (WORKER)
@@ -203,8 +225,15 @@ async def process_workqueue(
 
                 item.update(data)
 
+                comparison_message = (
+                    process_result.get(
+                        "comparison_message"
+                    )
+                    or "Completed"
+                )
+
                 item.complete(
-                    "Completed"
+                    comparison_message
                 )
 
             except WorkItemError as error:

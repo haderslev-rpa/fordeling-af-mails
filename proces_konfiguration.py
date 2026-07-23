@@ -78,7 +78,7 @@ MAILBOXES = [
     MailboxConfig(
         address="post@haderslev.dk",
         folder="inbox",
-        enabled=False,
+        enabled=True,
     ),
 ]
 

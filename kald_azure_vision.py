@@ -1,12 +1,20 @@
 """
 AZURE VISION ADAPTER
 
-Denne fil er et tilkoblingspunkt til jeres eksisterende
-Azure Vision-kode.
+Wrapper omkring AzureVisionClient.
 
-Azure Vision er deaktiveret i denne første worker-version.
-PDF-filer med tekstlag læses stadig med pypdf.
+Bruges af laes_filindhold.py.
+
+Credential håndteres automatisk via:
+
+API_AZURE_VISION
+
+i Automation Server.
 """
+from q_azure_vision_api.api_client import (
+AzureVisionClient,
+)
+
 
 # -------------------------------------------------
 # ER AZURE KLAR?
@@ -14,10 +22,12 @@ PDF-filer med tekstlag læses stadig med pypdf.
 
 def azure_vision_is_configured():
     """
-    Returnerer False indtil Azure-kaldet er koblet på.
+    Returnerer True.
+
+    Azure er aktiv i denne version.
     """
 
-    return False
+    return True
 
 
 # -------------------------------------------------
@@ -29,13 +39,22 @@ def read_file_with_azure_vision(
     file_bytes,
 ):
     """
-    Skal senere kalde jeres eksisterende
-    Azure Vision-funktion.
+    Læser fil med Azure Vision.
 
-    Azure-objectet skal selv håndtere
-    konti, kvoter og genforsøg.
+    Returnerer ren tekst.
     """
 
-    raise NotImplementedError(
-        "Azure Vision-adapteren er ikke koblet på."
+    client = AzureVisionClient()
+
+    result = client.read_image(
+        file_bytes=file_bytes,
+        language="da",
     )
+
+    text = (
+        AzureVisionClient.extract_text(
+            result
+        )
+    )
+
+    return text
