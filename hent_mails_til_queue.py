@@ -34,22 +34,6 @@ logger = logging.getLogger(__name__)
 
 
 # -------------------------------------------------
-# DUBLETCHECK TIL SENERE
-# -------------------------------------------------
-
-def item_exists_in_queue(item_id):
-    """
-    Midlertidig kontrakt til dubletkontrol.
-
-    Queue-navnet findes senere via Automation Server.
-    """
-
-    raise NotImplementedError(
-        "item_exists_in_queue er ikke implementeret endnu."
-    )
-
-
-# -------------------------------------------------
 # ROBOTKATEGORIER
 # -------------------------------------------------
 
@@ -306,20 +290,6 @@ def hent_mails_til_queue():
                 )
 
                 continue
-
-            # -------------------------------------------------
-            # DUBLETCHECK AKTIVERES SENERE
-            # -------------------------------------------------
-
-            # if item_exists_in_queue(
-            #     queue_name=QUEUE_NAME,
-            #     item_id=message_id,
-            # ):
-            #     logger.info(
-            #         "Mailen findes allerede i køen: %s",
-            #         message_id,
-            #     )
-            #     continue
 
             box_data = byg_box_data(
                 mail=mail,

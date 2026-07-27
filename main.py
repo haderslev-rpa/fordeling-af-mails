@@ -2,6 +2,8 @@ import asyncio
 import logging
 import sys
 from pprint import pprint
+import re
+import unicodedata
 
 
 
@@ -55,6 +57,78 @@ logging.getLogger(
 
 
 # ------------------------------------------------------------
+# NORMALISÉR REFERENCETEKST
+# ------------------------------------------------------------
+
+def normalize_reference_text(
+    value,
+):
+    """
+    Gør tekst stabil til queue-reference.
+
+    Bevarer:
+    - æ
+    - ø
+    - å
+
+    Fjerner forskelle i:
+    - tabs
+    - linjeskift
+    - dobbelt mellemrum
+    - mærkelige unicode-varianter
+    """
+
+    text = str(
+        value or ""
+    )
+
+    text = unicodedata.normalize(
+        "NFKC",
+        text,
+    )
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text,
+    )
+
+    return text.strip()
+
+
+# ------------------------------------------------------------
+# BUILD ITEM REFERENCE
+# ------------------------------------------------------------
+
+def build_item_reference(
+    mail_data,
+):
+    """
+    Bygger stabil queue-reference.
+    """
+
+    return (
+        normalize_reference_text(
+            mail_data[
+                "received_datetime_danish"
+            ]
+        )
+        + " - "
+        + normalize_reference_text(
+            mail_data[
+                "mailbox"
+            ]
+        )
+        + " - "
+        + normalize_reference_text(
+            mail_data[
+                "subject"
+            ]
+        )[:50]
+    )
+
+
+# ------------------------------------------------------------
 # QUEUE-MODE (PRODUCER)
 # ------------------------------------------------------------
 
@@ -85,31 +159,32 @@ async def populate_queue(
         )
 
         item_reference = (
-            data_json["box"]["mail"][
-                "received_datetime_danish"
-            ]
-            + " - "
-            + data_json["box"]["mail"][
-                "mailbox"
-            ]
-            + " - "
-            + data_json["box"]["mail"][
-                "subject"
-            ][:50]
+            build_item_reference(
+                data_json["box"]["mail"]
+            )
         )
 
-        if is_item_in_queue(
+        # ------------------------------------------------------------
+        # DUBLETKONTROL
+        # ------------------------------------------------------------
+
+        exists = is_item_in_queue(
             queue_id=workqueue.id,
             item_reference=item_reference,
+
             new=True,
             in_progress=True,
             completed=True,
-            failed=True,
+            failed=False,
             pending_user_action=True,
-        ):
-            logger.info(
-                "Springer over. "
-                "Reference findes allerede: %s",
+            updated_at=False,
+        )
+
+
+        if exists:
+
+            print(
+                "ALLEREDE I QUEUE:",
                 item_reference,
             )
 
