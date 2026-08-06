@@ -4,7 +4,9 @@ HENT MAILS TIL QUEUE
 Denne fil:
 - henter mails fra Outlook
 - filtrerer robotbehandlede mails
+- finder manuel genbehandling
 - bygger box_data
+- sorterer mails med ældste først
 - returnerer box_data til main.py
 
 Denne fil:
@@ -13,9 +15,28 @@ Denne fil:
 - bruger ikke workqueue.add_item
 - bruger ikke update_item_data
 - henter ikke Excel-regler
+
+MANUEL GENBEHANDLING:
+
+Hvis brugeren sætter kategorien:
+
+Robot genbehandel
+
+så må mailen gå videre, selv om:
+- mailen har andre robotkategorier
+- mailens body indeholder tidligere robottekst
+- mailen tidligere er behandlet
+
+Kategorien fjernes ikke i denne fil.
+
+Når worker-flowet behandler mailen med kategorier,
+overskrives alle kategorier med det nye resultat.
 """
 
+import html
 import logging
+import re
+import unicodedata
 
 from q_outlook_api.functionality.mail_api import (
     get_mails,
@@ -25,6 +46,7 @@ from proces_konfiguration import (
     MAILBOXES,
     MAIL_LIMIT_PER_MAILBOX,
     ROBOT_CATEGORY_MARKERS,
+    ROBOT_REPROCESS_CATEGORY,
     ROBOT_RULE_NUMBER_MARKER,
     build_previous_forward_text,
 )
@@ -34,24 +56,127 @@ logger = logging.getLogger(__name__)
 
 
 # -------------------------------------------------
+# MANUEL GENBEHANDLING
+# -------------------------------------------------
+
+def skal_genbehandles(
+    categories,
+):
+    """
+    Kontrollerer om brugeren har valgt
+    kategorien "Robot genbehandel".
+
+    Sammenligningen ignorerer:
+    - store og små bogstaver
+    - mellemrum før kategorien
+    - mellemrum efter kategorien
+    """
+
+    expected_category = (
+        ROBOT_REPROCESS_CATEGORY
+        .strip()
+        .casefold()
+    )
+
+    return any(
+        str(category)
+        .strip()
+        .casefold()
+        == expected_category
+        for category in (
+            categories
+            or []
+        )
+    )
+
+
+# -------------------------------------------------
 # ROBOTKATEGORIER
 # -------------------------------------------------
 
-def har_robotkategori(categories):
+def har_robotkategori(
+    categories,
+):
     """
-    Kontrollerer om mailen har en robotkategori.
+    Kontrollerer om mailen har en kategori,
+    som robotten tidligere har skrevet.
 
-    categories er en liste (samling af værdier).
+    Følgende kategorier genkendes:
+
+    Test
+    Point: 0
+    Point: 150
+    Nr: 3
+    Nr: 1035
+
+    Sammenligningen ignorerer forskel på
+    store og små bogstaver samt mellemrum.
     """
 
     for category in categories or []:
-        category_text = str(category)
+        category_text = (
+            str(category)
+            .strip()
+            .casefold()
+        )
 
-        for marker in ROBOT_CATEGORY_MARKERS:
-            if marker in category_text:
-                return True
+        if category_text == "test":
+            return True
+
+        if category_text.startswith(
+            "point:"
+        ):
+            return True
+
+        if category_text.startswith(
+            "nr:"
+        ):
+            return True
 
     return False
+
+# -------------------------------------------------
+# NORMALISÉR BODY TIL KONTROL
+# -------------------------------------------------
+
+def normaliser_body_til_kontrol(
+    body,
+):
+    """
+    Normaliserer mailens body til kontrol.
+
+    Funktionen håndterer:
+    - HTML-koder
+    - Unicode-varianter
+    - linjeskift
+    - tabs
+    - dobbelte mellemrum
+    - store og små bogstaver
+    """
+
+    body_text = html.unescape(
+        str(
+            body
+            or ""
+        )
+    )
+
+    body_text = unicodedata.normalize(
+        "NFKC",
+        body_text,
+    )
+
+    body_text = re.sub(
+        r"\s+",
+        " ",
+        body_text,
+    )
+
+    return (
+        body_text
+        .strip()
+        .casefold()
+    )
 
 
 # -------------------------------------------------
@@ -63,26 +188,77 @@ def er_tidligere_videresendt_af_robot(
     mailbox,
 ):
     """
-    Kontrollerer de samme to betingelser
-    som den eksisterende Blue Prism-proces.
+    Kontrollerer samme princip som Blue Prism.
 
-    Begge tekster skal findes:
-    - den faste videresendelsestekst
-    - teksten Regelnr:
+    Mailen betragtes kun som tidligere behandlet,
+    når body både indeholder:
+
+    1. "Videresend altid til [aktuel postkasse]"
+    2. "Regelnr:"
+
+    Det betyder:
+
+    - En mail, som vender tilbage til samme
+      postkasse, bliver sprunget over.
+
+    - En mail, som videresendes fra én overvåget
+      postkasse til en anden, må behandles i den
+      nye postkasse.
+
+    Manuel kategori "Robot genbehandel" håndteres
+    før denne funktion og tilsidesætter kontrollen.
     """
 
-    body_text = str(body or "")
-
-    expected_text = build_previous_forward_text(
-        mailbox
+    body_text = normaliser_body_til_kontrol(
+        body
     )
+
+    mailbox_text = (
+        str(
+            mailbox
+            or ""
+        )
+        .strip()
+        .casefold()
+    )
+
+    if not mailbox_text:
+        return False
+
+
+    # -------------------------------------------------
+    # KONTROLLÉR REGELNUMMER
+    # -------------------------------------------------
+
+    rule_number_found = (
+        ROBOT_RULE_NUMBER_MARKER
+        .strip()
+        .casefold()
+        in body_text
+    )
+
+
+    # -------------------------------------------------
+    # KONTROLLÉR AKTUEL POSTKASSE
+    # -------------------------------------------------
+
+    current_mailbox_text_found = (
+        (
+            "videresend altid til "
+            f"{mailbox_text}"
+        )
+        in body_text
+    )
+
+
+    # -------------------------------------------------
+    # RESULTAT
+    # -------------------------------------------------
 
     return (
-        expected_text in body_text
-        and ROBOT_RULE_NUMBER_MARKER in body_text
+        current_mailbox_text_found
+        and rule_number_found
     )
-
-
 # -------------------------------------------------
 # BYG BOX_DATA
 # -------------------------------------------------
@@ -90,6 +266,7 @@ def er_tidligere_videresendt_af_robot(
 def byg_box_data(
     mail,
     mailbox,
+    force_reprocess=False,
 ):
     """
     Bygger værdierne, som main.py placerer
@@ -97,10 +274,15 @@ def byg_box_data(
 
     Mail-body, kategorier og filindhold
     bliver ikke gemt.
+
+    force_reprocess=True betyder, at brugeren
+    har valgt kategorien "Robot genbehandel".
     """
 
     attachment_names = list(
-        mail.get("attachment_names")
+        mail.get(
+            "attachment_names"
+        )
         or []
     )
 
@@ -146,7 +328,13 @@ def byg_box_data(
             ),
         },
 
-        # Den vindende regel gemmes senere.
+        # Brugeren har manuelt valgt,
+        # at mailen skal behandles igen.
+        "force_reprocess": bool(
+            force_reprocess
+        ),
+
+        # Den valgte regel gemmes senere.
         "subject_points": None,
         "subject_match": "",
 
@@ -186,14 +374,15 @@ def hent_mails_fra_postkasse(
     Henter mails fra én postkasse.
 
     Body hentes som almindelig tekst, fordi body
-    bruges midlertidigt til Blue Prism-filteret.
+    bruges midlertidigt til robotfilteret.
 
     Body gemmes ikke i queue-itemet.
     """
+
     logger.info(
         "Henter mails fra den faktiske postkasse: %s",
         mailbox_config.address,
-)
+    )
 
     return get_mails(
         user_mail=mailbox_config.address,
@@ -204,7 +393,6 @@ def hent_mails_fra_postkasse(
         prefer_plain_text=True,
     )
 
-
 # -------------------------------------------------
 # HENT MAILS TIL QUEUE
 # -------------------------------------------------
@@ -214,38 +402,36 @@ def hent_mails_til_queue():
     Henter og filtrerer mails fra alle aktive
     postkasser.
 
-    Funktionen returnerer en liste (samling)
-    med box_data.
+    Funktionen returnerer en liste med box_data.
 
     main.py sørger selv for:
     - update_item_data
     - queue-reference
+    - dubletkontrol
     - workqueue.add_item
+
+    Der udskrives kun én samlet oversigt,
+    når alle postkasser er gennemgået.
     """
 
     box_data_items = []
 
+    total_mail_count = 0
     skipped_category_count = 0
     skipped_forward_count = 0
     skipped_missing_id_count = 0
+    reprocess_count = 0
 
     for mailbox_config in MAILBOXES:
         if not mailbox_config.enabled:
             continue
 
-        logger.info(
-            "Henter mails fra %s",
-            mailbox_config.address,
-        )
-
         mails = hent_mails_fra_postkasse(
             mailbox_config
         )
 
-        logger.info(
-            "%s mails blev hentet fra %s",
-            len(mails),
-            mailbox_config.address,
+        total_mail_count += len(
+            mails
         )
 
         for mail in mails:
@@ -256,49 +442,72 @@ def hent_mails_til_queue():
             if not message_id:
                 skipped_missing_id_count += 1
 
-                logger.warning(
-                    "Mail uden message_id blev "
-                    "sprunget over. Emne: %s",
-                    mail.get("subject"),
-                )
-
                 continue
 
-            if har_robotkategori(
+            categories = (
                 mail.get("categories")
+                or []
+            )
+
+            force_reprocess = (
+                skal_genbehandles(
+                    categories
+                )
+            )
+
+            # -------------------------------------------------
+            # MANUEL GENBEHANDLING
+            # -------------------------------------------------
+
+            if force_reprocess:
+                reprocess_count += 1
+
+            # -------------------------------------------------
+            # ROBOTKATEGORI
+            # -------------------------------------------------
+
+            elif har_robotkategori(
+                categories
             ):
                 skipped_category_count += 1
 
-                logger.debug(
-                    "Mail sprunget over på grund "
-                    "af robotkategori: %s",
-                    mail.get("subject"),
-                )
-
                 continue
 
-            if er_tidligere_videresendt_af_robot(
-                body=mail.get("body"),
-                mailbox=mailbox_config.address,
+            # -------------------------------------------------
+            # TIDLIGERE ROBOTVIDERESENDELSE
+            # -------------------------------------------------
+
+            if (
+                not force_reprocess
+                and er_tidligere_videresendt_af_robot(
+                    body=mail.get("body"),
+                    mailbox=(
+                        mailbox_config.address
+                    ),
+                )
             ):
                 skipped_forward_count += 1
 
-                logger.debug(
-                    "Tidligere robotvideresendt mail "
-                    "sprunget over: %s",
-                    mail.get("subject"),
-                )
-
                 continue
+
+            # -------------------------------------------------
+            # BYG BOX_DATA
+            # -------------------------------------------------
 
             box_data = byg_box_data(
                 mail=mail,
-                mailbox=mailbox_config.address,
+                mailbox=(
+                    mailbox_config.address
+                ),
+                force_reprocess=(
+                    force_reprocess
+                ),
             )
 
             box_data_items.append(
                 box_data
             )
+
 
     # -------------------------------------------------
     # SORTÉR ÆLDSTE MAIL FØRST
@@ -313,18 +522,40 @@ def hent_mails_til_queue():
         )
     )
 
-    logger.info(
-        (
-            "Mailhentning færdig. "
-            "Klargjort til queue: %s. "
-            "Robotkategori: %s. "
-            "Tidligere videresendt: %s. "
-            "Mangler message_id: %s."
-        ),
+
+    # -------------------------------------------------
+    # RESULTAT
+    # -------------------------------------------------
+
+    print()
+    print("===================================")
+    print("RESULTAT AF MAILFILTRERING")
+    print("===================================")
+    print(
+        "Mails hentet:",
+        total_mail_count,
+    )
+    print(
+        "Sendes videre til main:",
         len(box_data_items),
+    )
+    print(
+        "Manuel genbehandling:",
+        reprocess_count,
+    )
+    print(
+        "Robotkategori:",
         skipped_category_count,
+    )
+    print(
+        "Tidligere videresendt:",
         skipped_forward_count,
+    )
+    print(
+        "Mangler message_id:",
         skipped_missing_id_count,
     )
+    print("===================================")
+    print()
 
     return box_data_items

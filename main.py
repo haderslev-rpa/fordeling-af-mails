@@ -168,27 +168,40 @@ async def populate_queue(
         # DUBLETKONTROL
         # ------------------------------------------------------------
 
-        exists = is_item_in_queue(
-            queue_id=workqueue.id,
-            item_reference=item_reference,
-
-            new=True,
-            in_progress=True,
-            completed=True,
-            failed=False,
-            pending_user_action=True,
-            updated_at=False,
+        force_reprocess = bool(
+            data_json["box"].get(
+                "force_reprocess",
+                False,
+            )
         )
 
-
-        if exists:
-
+        if force_reprocess:
             print(
-                "ALLEREDE I QUEUE:",
+                "GENBEHANDLER ALTID:",
                 item_reference,
             )
 
-            continue
+        else:
+            exists = is_item_in_queue(
+                queue_id=workqueue.id,
+                item_reference=item_reference,
+
+                new=True,
+                in_progress=True,
+                completed=True,
+                failed=False,
+                pending_user_action=True,
+
+                updated_at=False,
+            )
+
+            if exists:
+                print(
+                    "SPRINGER OVER:",
+                    item_reference,
+                )
+
+                continue
 
         workqueue.add_item(
             data=data_json,

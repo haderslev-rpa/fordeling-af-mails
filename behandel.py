@@ -18,8 +18,14 @@ VIGTIGT:
 - Vedhæftningernes bytes gemmes ikke i item.data.
 - Udlæst dokumenttekst gemmes ikke i item.data.
 - CPR-nummeret gemmes aldrig.
-- Kun den vindende regels resultat gemmes i box.
-- Mailhandlingen er simuleret i denne version.
+- Kun den valgte regels resultat gemmes i box.
+- PDF-filer læses kun med pypdf.
+- Billedfiler kan læses med Azure Vision.
+- Regler under 300 point overskriver mailens kategorier.
+- Testregler overskriver mailens kategorier.
+- Aktive regler med mindst 300 point kan videresende
+  eller flytte mailen.
+- Outlook-handlingen udføres i MAIL_BEHANDLET.
 - behandel.py sætter ikke status.
 - behandel.py sætter ikke status_code.
 - main.py sætter status og status_code til sidst.
@@ -68,8 +74,8 @@ async def behandel_page(
     )
 
     from udfoer_mailhandling import (
-    execute_mail_action,
-    build_comparison_message,
+        build_comparison_message,
+        execute_mail_action,
     )
 
     from vurder_mail_mod_regler import (
@@ -204,6 +210,13 @@ async def behandel_page(
             f'Skip "{States.MAIL_BEHANDLET}"',
         )
 
+        comparison_message = (
+            data["box"].get(
+                "comparison_message"
+            )
+            or "Mailen var allerede behandlet"
+        )
+
         return {
             "already_processed": True,
             "mail_found": None,
@@ -221,8 +234,10 @@ async def behandel_page(
                 "status_message": (
                     "Mailen var allerede behandlet"
                 ),
-                "simulated": True,
             },
+            "comparison_message": (
+                comparison_message
+            ),
             "status_message": (
                 "Mailen var allerede behandlet"
             ),
@@ -258,6 +273,8 @@ async def behandel_page(
     rule_result = None
 
     action_result = None
+
+    comparison_message = "Completed"
 
 
     # ==========================================================
@@ -297,12 +314,18 @@ async def behandel_page(
 
             data["box"]["destination"] = None
 
+            comparison_message = (
+                "Mailen findes ikke længere "
+                "i Outlook"
+            )
+
+            data["box"][
+                "comparison_message"
+            ] = comparison_message
+
             log_step(
                 step,
-                (
-                    "Mailen findes ikke længere "
-                    "i Outlook"
-                ),
+                comparison_message,
             )
 
             update_item_data(
@@ -327,14 +350,14 @@ async def behandel_page(
                     ),
                     "destination": None,
                     "status_message": (
-                        "Mailen findes ikke længere "
-                        "i Outlook"
+                        comparison_message
                     ),
-                    "simulated": True,
                 },
+                "comparison_message": (
+                    comparison_message
+                ),
                 "status_message": (
-                    "Mailen findes ikke længere "
-                    "i Outlook"
+                    comparison_message
                 ),
             }
 
@@ -375,12 +398,18 @@ async def behandel_page(
 
             data["box"]["destination"] = None
 
+            comparison_message = (
+                "Mailen findes ikke længere "
+                "i Outlook"
+            )
+
+            data["box"][
+                "comparison_message"
+            ] = comparison_message
+
             log_step(
                 step,
-                (
-                    "Mailen findes ikke længere "
-                    "i Outlook"
-                ),
+                comparison_message,
             )
 
             update_item_data(
@@ -405,14 +434,14 @@ async def behandel_page(
                     ),
                     "destination": None,
                     "status_message": (
-                        "Mailen findes ikke længere "
-                        "i Outlook"
+                        comparison_message
                     ),
-                    "simulated": True,
                 },
+                "comparison_message": (
+                    comparison_message
+                ),
                 "status_message": (
-                    "Mailen findes ikke længere "
-                    "i Outlook"
+                    comparison_message
                 ),
             }
 
@@ -541,8 +570,11 @@ async def behandel_page(
         set_state(state)
 
     else:
-        # pypdf skal læse filerne igen ved
+        # pypdf skal læse PDF-filerne igen ved
         # hvert worker-forsøg.
+        #
+        # Billeder kan læses igen med Azure,
+        # hvis Azure-grænsen tillader det.
         #
         # Filtekst gemmes ikke i item.data.
 
@@ -737,9 +769,18 @@ async def behandel_page(
 
     else:
         # Regelresultatet beregnes igen til
-        # den simulerede mailhandling.
+        # Outlook-handlingen.
         #
-        # Kun vinderens felter er gemt i box.
+        # Kun den valgte regels felter er
+        # gemt i box.
+        #
+        # Første regel med mindst 300 point
+        # stopper regelgennemgangen.
+        #
+        # Hvis ingen regel når 300 point,
+        # bruges reglen med flest point.
+        #
+        # Ved pointlighed bruges den første regel.
 
         rule_result = select_winning_rule(
             rules=rules,
@@ -766,6 +807,19 @@ async def behandel_page(
             "Start",
         )
 
+        # Outlook-handlingen udføres her.
+        #
+        # Under 300 point:
+        #     Alle kategorier overskrives.
+        #     Mailen videresendes eller flyttes ikke.
+        #
+        # Testregel:
+        #     Alle kategorier overskrives.
+        #     Mailen videresendes eller flyttes ikke.
+        #
+        # Aktiv regel med mindst 300 point:
+        #     Mailen videresendes eller flyttes.
+
         action_result = execute_mail_action(
             mail=data["box"]["mail"],
             rule_result=rule_result,
@@ -773,14 +827,14 @@ async def behandel_page(
 
         comparison_message = (
             build_comparison_message(
-            rule_result=rule_result,
-            action_result=action_result,
+                rule_result=rule_result,
+                action_result=action_result,
+            )
         )
-        )
+
         data["box"][
             "comparison_message"
         ] = comparison_message
-
 
         data["box"]["action"] = (
             action_result.get(
@@ -797,10 +851,12 @@ async def behandel_page(
         log_step(
             step,
             (
-                "Simuleret handling: "
+                "Handling: "
                 f'{data["box"]["action"]}. '
                 "Destination: "
-                f'{data["box"]["destination"]}.'
+                f'{data["box"]["destination"]}. '
+                "Message: "
+                f"{comparison_message}."
             ),
         )
 
@@ -808,6 +864,14 @@ async def behandel_page(
             data,
             item=item,
         )
+
+        # State sættes først efter:
+        #
+        # 1. Outlook-handlingen er gennemført.
+        # 2. Resultatet er gemt i item.data.
+        #
+        # Hvis Outlook-handlingen fejler,
+        # bliver state derfor ikke sat.
 
         set_state(state)
 
@@ -822,8 +886,14 @@ async def behandel_page(
             "status_message": (
                 "Mailen var allerede behandlet"
             ),
-            "simulated": True,
         }
+
+        comparison_message = (
+            data["box"].get(
+                "comparison_message"
+            )
+            or "Mailen var allerede behandlet"
+        )
 
 
     # ==========================================================
@@ -856,7 +926,7 @@ async def behandel_page(
         ),
 
         "comparison_message": (
-        comparison_message
+            comparison_message
         ),
 
         # main.py bruger denne værdi

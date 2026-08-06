@@ -2,16 +2,19 @@
 LÆS FILINDHOLD
 
 PDF-filer:
-- læses altid først med pypdf
+- læses kun med pypdf
 - alle sider læses
-- Azure bruges kun, hvis PDF-filen mangler tekstlag
+- sendes aldrig til Azure
+- hvis PDF-filen mangler tekstlag, returneres tom tekst
 
-Billeder:
-- kræver Azure Vision
+Billedfiler:
+- sendes til Azure Vision
 
 Vedhæftede mails:
-- hentes som bytes
-- indholdet læses ikke
+- læses ikke
+
+Andre filtyper:
+- springes over
 
 Filtekst og bytes gemmes kun i hukommelsen.
 """
@@ -30,26 +33,22 @@ from kald_azure_vision import (
     read_file_with_azure_vision,
 )
 
-
-# -------------------------------------------------
-# KONSTANTER
-# -------------------------------------------------
-
-MAX_AZURE_ATTEMPTS_PER_ITEM = 50
-
-STATE_AZURE_LIMIT_REACHED = (
-    "3.2 - Maksimalt antal Azure-forsøg nået"
+from proces_konfiguration import (
+    MAX_AZURE_ATTEMPTS_PER_ITEM,
 )
+
+
+# -------------------------------------------------
+# BILLEDTYPER
+# -------------------------------------------------
 
 IMAGE_SUFFIXES = {
     ".bmp",
-    ".gif",
     ".jpeg",
     ".jpg",
     ".png",
     ".tif",
     ".tiff",
-    ".webp",
 }
 
 
@@ -57,9 +56,13 @@ IMAGE_SUFFIXES = {
 # LÆS PDF MED PYPDF
 # -------------------------------------------------
 
-def read_pdf_with_pypdf(file_bytes):
+def read_pdf_with_pypdf(
+    file_bytes,
+):
     """
-    Læser alle PDF-sider direkte fra bytes.
+    Læser tekst fra alle PDF-sider.
+
+    PDF-filen læses direkte fra bytes.
     """
 
     reader = PdfReader(
@@ -89,49 +92,66 @@ def read_pdf_with_pypdf(file_bytes):
 
 def pdf_has_text(text):
     """
-    Kontrollerer om pypdf fandt bogstaver eller tal.
+    Kontrollerer om PDF-teksten indeholder
+    bogstaver eller tal.
     """
 
     return any(
         character.isalnum()
-        for character in str(text or "")
+        for character in str(
+            text or ""
+        )
     )
 
 
 # -------------------------------------------------
-# AZURE COUNTER
+# HENT AZURE COUNTER
 # -------------------------------------------------
 
-def get_azure_attempt_count(item):
+def get_azure_attempt_count(
+    item,
+):
     """
-    Henter Azure-counteren fra item.data["box"].
+    Henter Azure-counteren fra box.
     """
 
     return int(
         (
             item.data
             .get("box", {})
-            .get("azure_attempt_count", 0)
+            .get(
+                "azure_attempt_count",
+                0,
+            )
         )
         or 0
     )
 
 
-def increment_azure_attempt_count(item):
+# -------------------------------------------------
+# FORØG AZURE COUNTER
+# -------------------------------------------------
+
+def increment_azure_attempt_count(
+    item,
+):
     """
-    Forøger counteren før Azure-kaldet.
+    Forøger Azure-counteren før Azure-kaldet.
     """
 
     new_count = (
-        get_azure_attempt_count(item)
+        get_azure_attempt_count(
+            item
+        )
         + 1
     )
 
+    item.data["box"][
+        "azure_attempt_count"
+    ] = new_count
+
     update_item_data(
         item.data,
-        box_updates={
-            "azure_attempt_count": new_count,
-        },
         item=item,
     )
 
@@ -147,7 +167,10 @@ def read_one_attachment(
     item,
 ):
     """
-    Læser én vedhæftning til hukommelsen.
+    Læser én vedhæftning.
+
+    Returnerer udlæst tekst og metadata
+    i hukommelsen.
     """
 
     filename = (
@@ -178,11 +201,15 @@ def read_one_attachment(
         "text": "",
         "read_method": "skipped",
         "azure_used": False,
+        "azure_limit_reached": False,
         "success": True,
         "error": None,
     }
 
-    if not isinstance(file_bytes, bytes):
+    if not isinstance(
+        file_bytes,
+        bytes,
+    ):
         result["success"] = False
         result["error"] = (
             "Vedhæftningen mangler content_bytes"
@@ -190,7 +217,10 @@ def read_one_attachment(
 
         return result
 
-    # Vedhæftede mails skal ikke åbnes.
+    # -------------------------------------------------
+    # VEDHÆFTET MAIL
+    # -------------------------------------------------
+
     if (
         attachment_type == "itemAttachment"
         or item_type == "message"
@@ -202,83 +232,94 @@ def read_one_attachment(
 
         return result
 
-    local_text = ""
-    needs_azure = False
-
     # -------------------------------------------------
-    # PDF
+    # PDF LÆSES KUN MED PYPDF
     # -------------------------------------------------
 
     if suffix == ".pdf":
         try:
-            local_text = read_pdf_with_pypdf(
+            pdf_text = read_pdf_with_pypdf(
                 file_bytes
             )
 
-            if pdf_has_text(local_text):
-                result["text"] = local_text
-                result["read_method"] = "pypdf"
+            result["text"] = pdf_text
+            result["read_method"] = "pypdf"
 
-                return result
+            if not pdf_has_text(
+                pdf_text
+            ):
+                result["read_method"] = (
+                    "pypdf_no_text_layer"
+                )
 
-            needs_azure = True
+            return result
 
         except Exception as error:
-            needs_azure = True
-            result["error"] = str(error)
+            result["success"] = False
+            result["read_method"] = (
+                "pypdf_failed"
+            )
+            result["error"] = str(
+                error
+            )
+
+            return result
 
     # -------------------------------------------------
-    # BILLEDE
+    # IKKE-BILLEDE SPRINGES OVER
     # -------------------------------------------------
 
-    elif suffix in IMAGE_SUFFIXES:
-        needs_azure = True
-
-    # -------------------------------------------------
-    # IKKE UNDERSTØTTET
-    # -------------------------------------------------
-
-    else:
+    if suffix not in IMAGE_SUFFIXES:
         result["read_method"] = (
             "unsupported_file_type"
         )
 
         return result
 
-    if not needs_azure:
-        return result
+    # -------------------------------------------------
+    # AZURE ER IKKE KONFIGURERET
+    # -------------------------------------------------
 
-    # Azure er endnu ikke koblet på.
     if not azure_vision_is_configured():
-        result["text"] = local_text
+        result["success"] = False
         result["read_method"] = (
             "azure_not_configured"
+        )
+        result["error"] = (
+            "Azure Vision er ikke konfigureret"
         )
 
         return result
 
-    current_count = get_azure_attempt_count(
-        item
+    # -------------------------------------------------
+    # KONTROLLÉR AZURE-GRÆNSE
+    # -------------------------------------------------
+
+    current_count = (
+        get_azure_attempt_count(
+            item
+        )
     )
 
     if (
         current_count
         >= MAX_AZURE_ATTEMPTS_PER_ITEM
     ):
-        update_item_data(
-            item.data,
-            state=STATE_AZURE_LIMIT_REACHED,
-            item=item,
-        )
-
-        result["text"] = local_text
         result["read_method"] = (
             "azure_limit_reached"
         )
+        result["azure_limit_reached"] = True
 
         return result
 
-    increment_azure_attempt_count(item)
+    # Counteren gemmes før Azure-kaldet.
+    increment_azure_attempt_count(
+        item
+    )
+
+    # -------------------------------------------------
+    # LÆS BILLEDE MED AZURE
+    # -------------------------------------------------
 
     try:
         azure_text = (
@@ -288,9 +329,15 @@ def read_one_attachment(
             )
         )
 
-        result["text"] = azure_text or ""
-        result["read_method"] = "azure_vision"
+        result["text"] = (
+            azure_text
+            or ""
+        )
+        result["read_method"] = (
+            "azure_vision"
+        )
         result["azure_used"] = True
+        result["success"] = True
         result["error"] = None
 
     except Exception as error:
@@ -299,7 +346,9 @@ def read_one_attachment(
             "azure_vision_failed"
         )
         result["azure_used"] = True
-        result["error"] = str(error)
+        result["error"] = str(
+            error
+        )
 
     return result
 
@@ -336,10 +385,13 @@ def read_attachment_contents(
                 "text": "",
                 "read_method": "failed",
                 "azure_used": False,
+                "azure_limit_reached": False,
                 "success": False,
                 "error": str(error),
             }
 
-        results.append(result)
+        results.append(
+            result
+        )
 
     return results
