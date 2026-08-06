@@ -597,32 +597,34 @@ def build_empty_result(cpr_found):
 # VÆLG VINDENDE REGEL
 # -------------------------------------------------
 
+# -------------------------------------------------
+# VÆLG VINDENDE REGEL
+# -------------------------------------------------
+
 def select_winning_rule(
     rules,
     mail,
     file_results,
 ):
     """
-    Beregner alle regler for den aktuelle postkasse.
+    Gennemgår reglerne i Excel-rækkefølge.
 
-    Kun regler, som når pointgrænsen, kan vinde.
+    Logik:
 
-    Vinderen vælges således:
-
-    1. Højeste total point.
-    2. Ved samme point vinder første Excel-række.
-
-    Kun den vindende regel returneres.
+    1. Første regel med mindst 300 point vinder straks.
+    2. Hvis ingen regel når 300 point, vælges reglen
+       med det højeste antal point.
+    3. Ved pointlighed beholdes den første regel.
+    4. Hvis ingen regel giver point, returneres et
+       tomt resultat med 0 point.
     """
 
     file_names_text = combine_file_names(
         mail
     )
 
-    file_content_text = (
-        combine_file_contents(
-            file_results
-        )
+    file_content_text = combine_file_contents(
+        file_results
     )
 
     mail_body = get_mail_body(
@@ -635,36 +637,73 @@ def select_winning_rule(
         file_content_text,
     )
 
-    qualifying_results = []
+    best_result = None
 
     for rule in rules or []:
         result = evaluate_rule(
             rule=rule,
             mail=mail,
-            file_names_text=(
-                file_names_text
-            ),
-            file_content_text=(
-                file_content_text
-            ),
+            file_names_text=file_names_text,
+            file_content_text=file_content_text,
             cpr_found=cpr_found,
         )
 
-        if result["qualifies"]:
-            qualifying_results.append(
-                result
+        # -------------------------------------------------
+        # FØRSTE REGEL MED MINDST 300 POINT VINDER STRAKS
+        # -------------------------------------------------
+
+        if result["total_points"] >= 300:
+            result["qualifies"] = True
+
+            result["below_threshold"] = False
+
+            result["selection_reason"] = (
+                "Første regel med mindst 300 point"
             )
 
-    if not qualifying_results:
-        return build_empty_result(
+            return result
+
+        # -------------------------------------------------
+        # GEM DEN BEDSTE REGEL UNDER 300 POINT
+        # -------------------------------------------------
+
+        if (
+            best_result is None
+            or result["total_points"]
+            > best_result["total_points"]
+        ):
+            best_result = result
+
+        # Ved samme point overskriver vi ikke best_result.
+        # Derfor vinder den regel, der kom først i Excel.
+
+    # -------------------------------------------------
+    # INGEN REGLER
+    # -------------------------------------------------
+
+    if best_result is None:
+        empty_result = build_empty_result(
             cpr_found=cpr_found
         )
 
-    qualifying_results.sort(
-        key=lambda result: (
-            -result["total_points"],
-            result["excel_row_number"],
+        empty_result["below_threshold"] = True
+
+        empty_result["selection_reason"] = (
+            "Ingen regler kunne vurderes"
         )
+
+        return empty_result
+
+    # -------------------------------------------------
+    # BEDSTE REGEL UNDER 300 POINT
+    # -------------------------------------------------
+
+    best_result["qualifies"] = False
+
+    best_result["below_threshold"] = True
+
+    best_result["selection_reason"] = (
+        "Højeste point under 300"
     )
 
-    return qualifying_results[0]
+    return best_result

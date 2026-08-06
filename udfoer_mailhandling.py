@@ -89,66 +89,132 @@ def execute_mail_action(
     rule_result,
 ):
     """
-    Returnerer den handling, som senere skal udføres.
+    Bestemmer hvilken handling processen ville udføre.
 
-    Denne version ændrer ikke Outlook.
+    Der foretages ingen rigtig Outlook-handling endnu.
+
+    Mindst 300 point:
+        Simulér videresendelse, flytning eller testkategori.
+
+    Under 300 point:
+        Simulér kun kategorier.
+        Mailen må ikke videresendes eller flyttes.
     """
 
-    if not rule_result.get("qualifies"):
-        return {
-            "action": "no_match",
-            "destination": None,
-            "status_message": (
-                "Ingen regel matchede mailen"
-            ),
-            "simulated": True,
-        }
+    total_points = int(
+        rule_result.get(
+            "total_points",
+            0,
+        )
+        or 0
+    )
+
+    rule_number = rule_result.get(
+        "rule_number"
+    )
 
     destination = (
-        rule_result.get("destination")
+        rule_result.get(
+            "destination"
+        )
         or ""
     )
 
     rule_status = (
-        rule_result.get("rule_status")
+        rule_result.get(
+            "rule_status"
+        )
         or ""
     ).casefold()
 
     # -------------------------------------------------
-    # TESTREGEL
+    # INGEN REGEL ELLER 0 POINT
     # -------------------------------------------------
 
-    if rule_status == "test":
-        category = (
-            f"Test - Nr: "
-            f"{rule_result['rule_number']} - "
-            f"Point: "
-            f"{rule_result['total_points']}"
-        )
-
-        # Aktiveres senere:
-        #
-        # from q_outlook_api.functionality.mail_api import (
-        #     add_mail_category,
-        # )
-        #
-        # add_mail_category(
-        #     user_mail=mail["mailbox"],
-        #     message_id=mail["message_id"],
-        #     category=category,
-        # )
-
+    if (
+        rule_number is None
+        or total_points <= 0
+    ):
         return {
-            "action": "test_category",
-            "destination": category,
+            "action": "category_only",
+            "destination": None,
+            "categories": [
+                "Point: 0",
+            ],
             "status_message": (
-                "Testkategori ville blive tilføjet"
+                "Ingen regel gav point"
             ),
             "simulated": True,
         }
 
     # -------------------------------------------------
-    # VIDERESENDELSE
+    # BEDSTE REGEL UNDER 300 POINT
+    # -------------------------------------------------
+
+    if total_points < 300:
+        categories = [
+            f"Point: {total_points}",
+            f"Nr: {rule_number}",
+        ]
+
+        # Aktiveres senere, når testen er godkendt:
+        #
+        # from q_outlook_api.functionality.mail_api import (
+        #     update_mail_categories,
+        # )
+        #
+        # update_mail_categories(
+        #     user_mail=mail["mailbox"],
+        #     message_id=mail["message_id"],
+        #     categories=categories,
+        # )
+
+        return {
+            "action": "category_only",
+            "destination": None,
+            "categories": categories,
+            "status_message": (
+                "Kategorier ville blive tilføjet. "
+                "Mailen ville ikke blive fordelt"
+            ),
+            "simulated": True,
+        }
+
+    # -------------------------------------------------
+    # TESTREGEL MED MINDST 300 POINT
+    # -------------------------------------------------
+
+    if rule_status == "test":
+        categories = [
+            "Test",
+            f"Point: {total_points}",
+            f"Nr: {rule_number}",
+        ]
+
+        # Aktiveres senere:
+        #
+        # from q_outlook_api.functionality.mail_api import (
+        #     update_mail_categories,
+        # )
+        #
+        # update_mail_categories(
+        #     user_mail=mail["mailbox"],
+        #     message_id=mail["message_id"],
+        #     categories=categories,
+        # )
+
+        return {
+            "action": "test_category",
+            "destination": None,
+            "categories": categories,
+            "status_message": (
+                "Testkategorier ville blive tilføjet"
+            ),
+            "simulated": True,
+        }
+
+    # -------------------------------------------------
+    # VIDERESENDELSE MED MINDST 300 POINT
     # -------------------------------------------------
 
     if destination_is_email(
@@ -178,6 +244,7 @@ def execute_mail_action(
         return {
             "action": "forward",
             "destination": destination,
+            "categories": [],
             "status_message": (
                 "Mail ville blive videresendt"
             ),
@@ -186,13 +253,16 @@ def execute_mail_action(
         }
 
     # -------------------------------------------------
-    # FLYT TIL UNDERMAPPE
+    # FLYTNING MED MINDST 300 POINT
     # -------------------------------------------------
 
     if destination:
         # Aktiveres senere:
         #
-        # folder_id = find_folder_id(...)
+        # folder_id = find_folder_id(
+        #     mailbox=mail["mailbox"],
+        #     folder_name=destination,
+        # )
         #
         # move_mail(
         #     user_mail=mail["mailbox"],
@@ -203,6 +273,7 @@ def execute_mail_action(
         return {
             "action": "move",
             "destination": destination,
+            "categories": [],
             "status_message": (
                 "Mail ville blive flyttet "
                 "til undermappe"
@@ -210,11 +281,17 @@ def execute_mail_action(
             "simulated": True,
         }
 
+    # -------------------------------------------------
+    # REGEL UDEN DESTINATION
+    # -------------------------------------------------
+
     return {
         "action": "no_action",
         "destination": None,
+        "categories": [],
         "status_message": (
-            "Regel matchede uden destination"
+            "Regel nåede 300 point, "
+            "men manglede destination"
         ),
         "simulated": True,
     }
@@ -228,65 +305,58 @@ def build_comparison_message(
     action_result,
 ):
     """
-    Bygger samme type tekst som
-    Blue Prism lægger i Tag.
+    Bygger beskeden til Automation Server.
 
-    Bruges til sammenligning
-    mellem Blue Prism og Python.
+    Mindst 300 point:
+        Nr: 1035 + byg@haderslev.dk
+
+    Under 300 point:
+        Point: 150
+
+    Ingen point:
+        Point: 0
     """
 
-    rule_number = (
-        rule_result.get(
-            "rule_number"
-        )
-    )
-
-    total_points = (
+    total_points = int(
         rule_result.get(
             "total_points",
             0,
         )
+        or 0
     )
 
-    destination = (
-        action_result.get(
-            "destination"
+    rule_number = rule_result.get(
+        "rule_number"
+    )
+
+    destination = action_result.get(
+        "destination"
+    )
+
+    # -------------------------------------------------
+    # UNDER 300 POINT
+    # -------------------------------------------------
+
+    if total_points < 300:
+        return (
+            f"Point: {total_points}"
         )
-    )
 
-    action = (
-        action_result.get(
-            "action"
-        )
-    )
+    # -------------------------------------------------
+    # MINDST 300 POINT
+    # -------------------------------------------------
 
-    # ---------------------------------------------
-    # REGLEN MATCHER
-    # ---------------------------------------------
-
-    if rule_number:
-
+    if rule_number is not None:
         message = (
             f"Nr: {rule_number}"
         )
 
         if destination:
-
             message += (
                 f" + {destination}"
             )
 
-        elif action:
-
-            message += (
-                f" + {action}"
-            )
-
         return message
-
-    # ---------------------------------------------
-    # INGEN REGEL MATCHER
-    # ---------------------------------------------
 
     return (
         f"Point: {total_points}"
