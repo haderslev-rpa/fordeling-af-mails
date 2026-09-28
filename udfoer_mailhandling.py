@@ -40,24 +40,131 @@ from q_outlook_api.functionality.mail_api import (
     update_mail_categories,
 )
 
+from proces_konfiguration import (
+    ALLOWED_FORWARD_DOMAINS,
+)
 
 # -------------------------------------------------
 # ER DESTINATION EN MAILADRESSE?
 # -------------------------------------------------
 
-def destination_is_email(destination):
+def destination_is_email(
+    destination,
+):
     """
     Kontrollerer om destinationen ligner
-    en mailadresse.
+    en enkelt mailadresse.
+
+    Returnerer:
+        True:
+            Destinationen indeholder præcis ét @
+            og har tekst på begge sider.
+
+        False:
+            Destinationen betragtes ikke som en
+            mailadresse.
     """
 
     destination_text = str(
         destination or ""
     ).strip()
 
+    if destination_text.count("@") != 1:
+        return False
+
+    local_part, domain = (
+        destination_text.rsplit(
+            "@",
+            1,
+        )
+    )
+
     return bool(
+        local_part.strip()
+        and domain.strip()
+    )
+
+
+def get_destination_domain(
+    destination,
+):
+    """
+    Henter domænet fra en mailadresse.
+
+    Eksempel:
+        destination:
+            medarbejder@haderslev.dk
+
+        output:
+            haderslev.dk
+
+    Hvis destinationen ikke er en gyldig,
+    enkel mailadresse, returneres tom tekst.
+    """
+
+    destination_text = str(
+        destination or ""
+    ).strip()
+
+    if not destination_is_email(
         destination_text
-        and "@" in destination_text
+    ):
+        return ""
+
+    _, domain = destination_text.rsplit(
+        "@",
+        1,
+    )
+
+    return (
+        domain
+        .strip()
+        .rstrip(".")
+        .casefold()
+    )
+
+
+def destination_email_is_allowed(
+    destination,
+):
+    """
+    Kontrollerer om mailadressens domæne findes
+    i ALLOWED_FORWARD_DOMAINS.
+
+    Sammenligningen:
+    - ignorerer store og små bogstaver
+    - fjerner mellemrum
+    - kræver et præcist domænematch
+
+    Returnerer:
+        True:
+            Mailadressen må bruges.
+
+        False:
+            Mailadressen må ikke bruges.
+    """
+
+    destination_domain = (
+        get_destination_domain(
+            destination
+        )
+    )
+
+    if not destination_domain:
+        return False
+
+    allowed_domains = {
+        str(domain)
+        .strip()
+        .rstrip(".")
+        .casefold()
+        for domain in ALLOWED_FORWARD_DOMAINS
+        if str(domain).strip()
+    }
+
+    return (
+        destination_domain
+        in allowed_domains
     )
 
 
@@ -530,6 +637,16 @@ def execute_mail_action(
 
     Aktiv regel med mindst 300 point:
         Videresend eller flyt.
+
+    Sikkerhed:
+        En mailadresse skal tilhøre et domæne
+        i ALLOWED_FORWARD_DOMAINS.
+
+        Hvis domænet ikke er tilladt:
+        - mailen videresendes ikke
+        - originalmailen slettes ikke
+        - mailen får kategorier
+        - resultatet markeres som blokeret
     """
 
     mailbox = mail[
@@ -647,12 +764,50 @@ def execute_mail_action(
         }
 
     # -------------------------------------------------
-    # VIDERESEND TIL MAILADRESSE
+    # DESTINATION ER EN MAILADRESSE
     # -------------------------------------------------
 
     if destination_is_email(
         destination
     ):
+
+        # Dette er den afgørende sikkerhedskontrol.
+        #
+        # Der kaldes ikke forward_mail, før adressen
+        # er godkendt.
+
+        if not destination_email_is_allowed(
+            destination
+        ):
+            categories = build_rule_categories(
+                rule_result=rule_result,
+                include_test=False,
+            )
+
+            categories.append(
+                "Ekstern destination blokeret"
+            )
+
+            update_mail_categories(
+                user_mail=mailbox,
+                message_id=message_id,
+                categories=categories,
+            )
+
+            return {
+                "action": (
+                    "external_destination_blocked"
+                ),
+                "destination": destination,
+                "categories": categories,
+                "status_message": (
+                    "Mailen blev ikke videresendt. "
+                    "Destinationens domæne er ikke "
+                    "tilladt"
+                ),
+                "simulated": False,
+            }
+
         explanation = build_rule_explanation(
             rule_result=rule_result,
             mailbox=mailbox,
@@ -676,17 +831,23 @@ def execute_mail_action(
             },
         )
 
-
         # -------------------------------------------------
         # 2. SLET ORIGINALMAILEN
         # -------------------------------------------------
+        #
+        # Denne kode nås kun, hvis:
+        #
+        # - domænet er tilladt
+        # - forward_mail ikke har rejst en fejl
+        #
+        # Ved en videresendelsesfejl bliver
+        # originalmailen derfor ikke slettet.
 
         delete_result = delete_mail(
             user_mail=mailbox,
             message_id=message_id,
             permanent_delete=False,
         )
-
 
         # -------------------------------------------------
         # 3. RETURNÉR RESULTAT
@@ -703,6 +864,44 @@ def execute_mail_action(
             "explanation": explanation,
             "forward_result": forward_result,
             "delete_result": delete_result,
+            "simulated": False,
+        }
+
+    # -------------------------------------------------
+    # UGYLDIG DESTINATION MED @
+    # -------------------------------------------------
+    #
+    # Hvis destinationen indeholder @, men ikke er
+    # en gyldig enkel mailadresse, skal den ikke
+    # forsøges fortolket som en Outlook-mappe.
+
+    if "@" in destination:
+        categories = build_rule_categories(
+            rule_result=rule_result,
+            include_test=False,
+        )
+
+        categories.append(
+            "Ugyldig maildestination"
+        )
+
+        update_mail_categories(
+            user_mail=mailbox,
+            message_id=message_id,
+            categories=categories,
+        )
+
+        return {
+            "action": (
+                "invalid_email_destination"
+            ),
+            "destination": destination,
+            "categories": categories,
+            "status_message": (
+                "Mailen blev ikke videresendt. "
+                "Destinationen er ikke en gyldig "
+                "mailadresse"
+            ),
             "simulated": False,
         }
 

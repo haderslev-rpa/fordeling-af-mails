@@ -342,6 +342,26 @@ RULE_TYPE_ADDITIONAL = (
 
 RULE_FORWARD_MINIMUM_POINTS = 300
 
+# -------------------------------------------------
+# TILLADTE DOMÆNER TIL VIDERESENDELSE
+# -------------------------------------------------
+
+# Robotten må kun videresende mails til adresser,
+# der har et domæne på denne liste.
+#
+# Sammenligningen kræver et præcist domænematch.
+#
+# Tilladt:
+#     medarbejder@haderslev.dk
+#
+# Ikke tilladt:
+#     medarbejder@gmail.com
+#     medarbejder@subdomain.haderslev.dk
+#     medarbejder@haderslev.dk.example.com
+
+ALLOWED_FORWARD_DOMAINS = (
+    "haderslev.dk",
+)
 
 # -------------------------------------------------
 # AZURE
