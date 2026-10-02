@@ -82,6 +82,11 @@ async def behandel_page(
         select_winning_rule,
     )
 
+    from laes_distribution_xml import (
+    bruger_distribution_xml,
+    resolve_rule_destination,
+    )
+
     import logging
 
     logger = logging.getLogger(__name__)
@@ -788,6 +793,64 @@ async def behandel_page(
             file_results=file_results,
         )
 
+    # ==========================================================
+    # AFGØR DYNAMISK DESTINATION
+    # ==========================================================
+    #
+    # Denne blok ligger efter regelvurderingen.
+    #
+    # Det betyder:
+    #
+    # - Reglen skal først vinde efter de normale regler.
+    # - En aktiv regel skal stadig have mindst 300 point.
+    # - Testregler læser ikke distribution.xml.
+    # - Regler under 300 point læser ikke distribution.xml.
+    #
+    total_points = int(
+        rule_result.get(
+            "total_points",
+            0,
+        )
+        or 0
+    )
+
+    rule_status = (
+        rule_result.get(
+            "rule_status"
+        )
+        or ""
+    ).strip().casefold()
+
+    configured_destination = (
+        rule_result.get(
+            "destination"
+        )
+        or ""
+    ).strip()
+
+    should_resolve_distribution_xml = (
+        total_points >= 300
+        and rule_status == "aktiv"
+        and bruger_distribution_xml(
+            configured_destination
+        )
+    )
+
+    if should_resolve_distribution_xml:
+        rule_result = resolve_rule_destination(
+            rule_result=rule_result,
+            attachments=attachments,
+        )
+
+        log_step(
+            "DYNAMISK_DESTINATION",
+            (
+                "Modtager blev læst fra "
+                "distribution.xml. "
+                f'Destination: '
+                f'{rule_result.get("destination")}.'
+            ),
+        )
 
     # ==========================================================
     step = "MAIL_BEHANDLET"
