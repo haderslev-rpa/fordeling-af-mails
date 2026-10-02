@@ -340,7 +340,7 @@ RULE_TYPE_ADDITIONAL = (
     "Tillægsregel"
 )
 
-RULE_FORWARD_MINIMUM_POINTS = 300
+RULE_FORWARD_MINIMUM_POINTS = 300 # Denne er ikke implementere men hardcored de andre steder
 
 # -------------------------------------------------
 # TILLADTE DOMÆNER TIL VIDERESENDELSE
