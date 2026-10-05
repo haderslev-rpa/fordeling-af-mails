@@ -83,8 +83,8 @@ async def behandel_page(
     )
 
     from laes_distribution_xml import (
-    bruger_distribution_xml,
-    resolve_rule_destination,
+        bruger_distribution_xml,
+        resolve_rule_destination,
     )
 
     import logging
@@ -799,12 +799,20 @@ async def behandel_page(
     #
     # Denne blok ligger efter regelvurderingen.
     #
-    # Det betyder:
+    # distribution.xml læses kun, når den valgte regel
+    # bruger pladsholderen:
     #
-    # - Reglen skal først vinde efter de normale regler.
-    # - En aktiv regel skal stadig have mindst 300 point.
-    # - Testregler læser ikke distribution.xml.
-    # - Regler under 300 point læser ikke distribution.xml.
+    #     {{distribution.xml:internal_email}}
+    #
+    # Aktiv regel:
+    #     XML læses kun ved mindst 300 point.
+    #
+    # Testregel:
+    #     XML læses også, så testen viser den destination,
+    #     robotten ville have anvendt.
+    #
+    # Testreglen videresender, flytter eller sletter
+    # fortsat ikke mailen.
     #
     total_points = int(
         rule_result.get(
@@ -828,11 +836,20 @@ async def behandel_page(
         or ""
     ).strip()
 
-    should_resolve_distribution_xml = (
-        total_points >= 300
-        and rule_status == "aktiv"
-        and bruger_distribution_xml(
+    uses_distribution_xml = (
+        bruger_distribution_xml(
             configured_destination
+        )
+    )
+
+    should_resolve_distribution_xml = (
+        uses_distribution_xml
+        and (
+            rule_status == "test"
+            or (
+                rule_status == "aktiv"
+                and total_points >= 300
+            )
         )
     )
 
@@ -847,6 +864,7 @@ async def behandel_page(
             (
                 "Modtager blev læst fra "
                 "distribution.xml. "
+                f'Status: {rule_status}. '
                 f'Destination: '
                 f'{rule_result.get("destination")}.'
             ),

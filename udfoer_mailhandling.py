@@ -713,12 +713,44 @@ def execute_mail_action(
     # -------------------------------------------------
     # TESTREGEL
     # -------------------------------------------------
-
+    #
+    # Testreglen udfører ingen Outlook-fordeling.
+    #
+    # Hvis destinationen blev læst fra distribution.xml,
+    # indeholder destination nu værdien fra internal_email.
+    #
+    # Kategorien viser derfor, hvor mailen ville være
+    # blevet sendt hen.
+    #
     if rule_status == "test":
         categories = build_rule_categories(
             rule_result=rule_result,
             include_test=True,
         )
+
+        if destination:
+            categories.append(
+                f"Til: {destination}"
+            )
+
+        # Hvis testdestinationen er en mailadresse,
+        # afprøves den samme domænekontrol som ved
+        # en aktiv regel.
+        #
+        # Der videresendes stadig ikke noget.
+        destination_blocked = (
+            destination_is_email(
+                destination
+            )
+            and not destination_email_is_allowed(
+                destination
+            )
+        )
+
+        if destination_blocked:
+            categories.append(
+                "Ekstern destination blokeret"
+            )
 
         update_mail_categories(
             user_mail=mailbox,
@@ -726,16 +758,30 @@ def execute_mail_action(
             categories=categories,
         )
 
+        if destination_blocked:
+            status_message = (
+                "Testkategorier opdateret. "
+                "Destinationens domæne er ikke tilladt"
+            )
+        elif destination:
+            status_message = (
+                "Testkategorier opdateret. "
+                "Destinationen blev fundet"
+            )
+        else:
+            status_message = (
+                "Testkategorier opdateret. "
+                "Destinationen manglede"
+            )
+
         return {
             "action": "test_category",
             "destination": destination or None,
             "categories": categories,
-            "status_message": (
-                "Testkategorier opdateret"
-            ),
-            "simulated": False,
+            "status_message": status_message,
+            "simulated": True,
         }
-
+ 
     # -------------------------------------------------
     # AKTIV REGEL UDEN REGELNUMMER
     # -------------------------------------------------
