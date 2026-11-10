@@ -31,6 +31,7 @@ VIGTIGT:
 """
 
 from html import escape
+from email.utils import parseaddr
 
 from q_outlook_api.functionality.mail_api import (
     delete_mail,
@@ -44,64 +45,198 @@ from proces_konfiguration import (
     ALLOWED_FORWARD_DOMAINS,
 )
 
-# -------------------------------------------------
-# ER DESTINATION EN MAILADRESSE?
-# -------------------------------------------------
 
-def destination_is_email(
-    destination,
-):
+# -------------------------------------------------
+# SER DESTINATIONEN UD SOM MAILADRESSER?
+# -------------------------------------------------
+def destination_contains_email(destination):
     """
-    Kontrollerer om destinationen ligner
-    en enkelt mailadresse.
+    Kontrollerer, om destinationen skal behandles som en
+    maildestination frem for en Outlook-mappe.
 
     Returnerer:
         True:
-            Destinationen indeholder præcis ét @
-            og har tekst på begge sider.
-
+            Destinationen indeholder mindst ét @.
         False:
-            Destinationen betragtes ikke som en
-            mailadresse.
+            Destinationen indeholder ikke @.
     """
-
     destination_text = str(
         destination or ""
     ).strip()
 
-    if destination_text.count("@") != 1:
-        return False
-
-    local_part, domain = (
-        destination_text.rsplit(
-            "@",
-            1,
-        )
-    )
-
-    return bool(
-        local_part.strip()
-        and domain.strip()
-    )
+    return "@" in destination_text
 
 
-def get_destination_domain(
-    destination,
-):
+# -------------------------------------------------
+# SPLIT MAILDESTINATIONER
+# -------------------------------------------------
+def split_email_destinations(destination):
     """
-    Henter domænet fra en mailadresse.
+    Splitter en semikolonsepareret maildestination.
 
     Eksempel:
-        destination:
+        Input:
+            "a@haderslev.dk; b@haderslev.dk"
+
+        Output:
+            [
+                "a@haderslev.dk",
+                "b@haderslev.dk",
+            ]
+
+    Der fjernes mellemrum omkring adresserne.
+
+    En blank destination returnerer en tom liste.
+
+    Tomme elementer mellem semikoloner accepteres ikke.
+    Det forhindrer eksempelvis:
+        "a@haderslev.dk;;b@haderslev.dk"
+    """
+    destination_text = str(
+        destination or ""
+    ).strip()
+
+    if not destination_text:
+        return []
+
+    raw_destinations = destination_text.split(";")
+
+    email_destinations = []
+
+    for position, raw_destination in enumerate(
+        raw_destinations,
+        start=1,
+    ):
+        email_destination = raw_destination.strip()
+
+        if not email_destination:
+            raise ValueError(
+                "Maildestinationen indeholder en tom "
+                f"adresse på position {position}. "
+                "Kontrollér placeringen af semikoloner."
+            )
+
+        email_destinations.append(
+            email_destination
+        )
+
+    return email_destinations
+
+
+# -------------------------------------------------
+# ER ÉN DESTINATION EN GYLDIG MAILADRESSE?
+# -------------------------------------------------
+def destination_is_email(destination):
+    """
+    Kontrollerer én enkelt mailadresse.
+
+    Funktionen accepterer ikke flere adresser i samme tekst.
+    Flere adresser skal først splittes med
+    split_email_destinations().
+
+    Returnerer:
+        True:
+            Adressen har et gyldigt grundformat.
+        False:
+            Adressen har et ugyldigt format.
+    """
+    destination_text = str(
+        destination or ""
+    ).strip()
+
+    if not destination_text:
+        return False
+
+    # Semikolon må kun bruges til at adskille adresser
+    # før denne funktion kaldes.
+    if ";" in destination_text:
+        return False
+
+    # Mellemrum accepteres ikke inde i en mailadresse.
+    if any(
+        character.isspace()
+        for character in destination_text
+    ):
+        return False
+
+    display_name, parsed_address = parseaddr(
+        destination_text
+    )
+
+    # Visningsnavne som:
+    # "Rune Hedegaard <rune@haderslev.dk>"
+    # accepteres ikke i Excel-feltet.
+    if display_name:
+        return False
+
+    # parseaddr må ikke ændre den indtastede adresse.
+    if parsed_address != destination_text:
+        return False
+
+    if parsed_address.count("@") != 1:
+        return False
+
+    local_part, domain = parsed_address.rsplit(
+        "@",
+        1,
+    )
+
+    if not local_part or not domain:
+        return False
+
+    if local_part.startswith("."):
+        return False
+
+    if local_part.endswith("."):
+        return False
+
+    if ".." in local_part:
+        return False
+
+    if domain.startswith("."):
+        return False
+
+    if domain.endswith("."):
+        return False
+
+    if "." not in domain:
+        return False
+
+    domain_parts = domain.split(".")
+
+    if any(
+        not domain_part
+        for domain_part in domain_parts
+    ):
+        return False
+
+    if any(
+        domain_part.startswith("-")
+        or domain_part.endswith("-")
+        for domain_part in domain_parts
+    ):
+        return False
+
+    return True
+
+
+# -------------------------------------------------
+# HENT DOMÆNET FRA ÉN MAILADRESSE
+# -------------------------------------------------
+def get_destination_domain(destination):
+    """
+    Henter domænet fra én valideret mailadresse.
+
+    Eksempel:
+        Input:
             medarbejder@haderslev.dk
 
-        output:
+        Output:
             haderslev.dk
 
-    Hvis destinationen ikke er en gyldig,
-    enkel mailadresse, returneres tom tekst.
+    Hvis destinationen ikke er én gyldig mailadresse,
+    returneres tom tekst.
     """
-
     destination_text = str(
         destination or ""
     ).strip()
@@ -124,11 +259,12 @@ def get_destination_domain(
     )
 
 
-def destination_email_is_allowed(
-    destination,
-):
+# -------------------------------------------------
+# ER ÉN MAILADRESSE TILLADT?
+# -------------------------------------------------
+def destination_email_is_allowed(destination):
     """
-    Kontrollerer om mailadressens domæne findes
+    Kontrollerer om én mailadresses domæne findes
     i ALLOWED_FORWARD_DOMAINS.
 
     Sammenligningen:
@@ -136,18 +272,10 @@ def destination_email_is_allowed(
     - fjerner mellemrum
     - kræver et præcist domænematch
 
-    Returnerer:
-        True:
-            Mailadressen må bruges.
-
-        False:
-            Mailadressen må ikke bruges.
+    Funktionen skal kaldes én gang pr. adresse.
     """
-
-    destination_domain = (
-        get_destination_domain(
-            destination
-        )
+    destination_domain = get_destination_domain(
+        destination
     )
 
     if not destination_domain:
@@ -162,10 +290,104 @@ def destination_email_is_allowed(
         if str(domain).strip()
     }
 
-    return (
-        destination_domain
-        in allowed_domains
-    )
+    return destination_domain in allowed_domains
+
+
+# -------------------------------------------------
+# VALIDÉR ALLE MAILDESTINATIONER
+# -------------------------------------------------
+def validate_email_destinations(destination):
+    """
+    Splitter og validerer alle mailadresser.
+
+    Alle adresser skal være:
+    - udfyldt
+    - gyldige enkeltadresser
+    - på et tilladt domæne
+
+    Returnerer:
+        Dictionary med:
+        - valid
+        - destinations
+        - invalid_destinations
+        - blocked_destinations
+        - error_message
+
+    Der udføres ingen Outlook-handling i denne funktion.
+    """
+    try:
+        destinations = split_email_destinations(
+            destination
+        )
+    except ValueError as error:
+        return {
+            "valid": False,
+            "destinations": [],
+            "invalid_destinations": [],
+            "blocked_destinations": [],
+            "error_message": str(error),
+        }
+
+    if not destinations:
+        return {
+            "valid": False,
+            "destinations": [],
+            "invalid_destinations": [],
+            "blocked_destinations": [],
+            "error_message": (
+                "Der blev ikke fundet nogen mailadresser."
+            ),
+        }
+
+    invalid_destinations = [
+        email_destination
+        for email_destination in destinations
+        if not destination_is_email(
+            email_destination
+        )
+    ]
+
+    if invalid_destinations:
+        return {
+            "valid": False,
+            "destinations": destinations,
+            "invalid_destinations": invalid_destinations,
+            "blocked_destinations": [],
+            "error_message": (
+                "En eller flere mailadresser har "
+                "et ugyldigt format."
+            ),
+        }
+
+    blocked_destinations = [
+        email_destination
+        for email_destination in destinations
+        if not destination_email_is_allowed(
+            email_destination
+        )
+    ]
+
+    if blocked_destinations:
+        return {
+            "valid": False,
+            "destinations": destinations,
+            "invalid_destinations": [],
+            "blocked_destinations": blocked_destinations,
+            "error_message": (
+                "En eller flere mailadresser har "
+                "et domæne, som ikke er tilladt."
+            ),
+        }
+
+    return {
+        "valid": True,
+        "destinations": destinations,
+        "invalid_destinations": [],
+        "blocked_destinations": [],
+        "error_message": None,
+    }
+
+
 
 
 # -------------------------------------------------
@@ -628,31 +850,31 @@ def execute_mail_action(
     - message_id
 
     Regelvalg:
-
     Under 300 point:
         Overskriv kategorier.
 
     Testregel:
         Overskriv kategorier.
+        Validér eventuelle maildestinationer.
+        Videresend ikke.
 
     Aktiv regel med mindst 300 point:
-        Videresend eller flyt.
+        Videresend til én eller flere mailadresser,
+        eller flyt til en Outlook-mappe.
 
     Sikkerhed:
-        En mailadresse skal tilhøre et domæne
-        i ALLOWED_FORWARD_DOMAINS.
+        Alle mailadresser valideres enkeltvis.
+        Alle adresser skal tilhøre et domæne i
+        ALLOWED_FORWARD_DOMAINS.
 
-        Hvis domænet ikke er tilladt:
-        - mailen videresendes ikke
+        Hvis blot én adresse er ugyldig eller blokeret:
+        - videresendes mailen ikke
         - originalmailen slettes ikke
-        - mailen får kategorier
-        - resultatet markeres som blokeret
+        - mailen får en fejlkategori
     """
-
     mailbox = mail[
         "mailbox"
     ]
-
     message_id = mail[
         "message_id"
     ]
@@ -686,7 +908,6 @@ def execute_mail_action(
     # -------------------------------------------------
     # BEDSTE REGEL UNDER 300 POINT
     # -------------------------------------------------
-
     if total_points < 300:
         categories = build_rule_categories(
             rule_result=rule_result,
@@ -702,6 +923,7 @@ def execute_mail_action(
         return {
             "action": "category_only",
             "destination": None,
+            "destinations": [],
             "categories": categories,
             "status_message": (
                 "Kategorier opdateret. "
@@ -713,15 +935,6 @@ def execute_mail_action(
     # -------------------------------------------------
     # TESTREGEL
     # -------------------------------------------------
-    #
-    # Testreglen udfører ingen Outlook-fordeling.
-    #
-    # Hvis destinationen blev læst fra distribution.xml,
-    # indeholder destination nu værdien fra internal_email.
-    #
-    # Kategorien viser derfor, hvor mailen ville være
-    # blevet sendt hen.
-    #
     if rule_status == "test":
         categories = build_rule_categories(
             rule_result=rule_result,
@@ -733,24 +946,29 @@ def execute_mail_action(
                 f"Til: {destination}"
             )
 
-        # Hvis testdestinationen er en mailadresse,
-        # afprøves den samme domænekontrol som ved
-        # en aktiv regel.
-        #
-        # Der videresendes stadig ikke noget.
-        destination_blocked = (
-            destination_is_email(
-                destination
-            )
-            and not destination_email_is_allowed(
-                destination
-            )
-        )
+        validation_result = None
 
-        if destination_blocked:
-            categories.append(
-                "Ekstern destination blokeret"
+        if destination_contains_email(
+            destination
+        ):
+            validation_result = (
+                validate_email_destinations(
+                    destination
+                )
             )
+
+            if validation_result[
+                "invalid_destinations"
+            ]:
+                categories.append(
+                    "Ugyldig maildestination"
+                )
+            elif validation_result[
+                "blocked_destinations"
+            ]:
+                categories.append(
+                    "Ekstern destination blokeret"
+                )
 
         update_mail_categories(
             user_mail=mailbox,
@@ -758,10 +976,25 @@ def execute_mail_action(
             categories=categories,
         )
 
-        if destination_blocked:
+        if (
+            validation_result
+            and validation_result[
+                "invalid_destinations"
+            ]
+        ):
             status_message = (
                 "Testkategorier opdateret. "
-                "Destinationens domæne er ikke tilladt"
+                "En eller flere mailadresser er ugyldige"
+            )
+        elif (
+            validation_result
+            and validation_result[
+                "blocked_destinations"
+            ]
+        ):
+            status_message = (
+                "Testkategorier opdateret. "
+                "Et eller flere domæner er ikke tilladt"
             )
         elif destination:
             status_message = (
@@ -777,15 +1010,20 @@ def execute_mail_action(
         return {
             "action": "test_category",
             "destination": destination or None,
+            "destinations": (
+                validation_result["destinations"]
+                if validation_result
+                else []
+            ),
             "categories": categories,
             "status_message": status_message,
+            "validation": validation_result,
             "simulated": True,
         }
- 
+
     # -------------------------------------------------
     # AKTIV REGEL UDEN REGELNUMMER
     # -------------------------------------------------
-
     if rule_number is None:
         categories = build_rule_categories(
             rule_result=rule_result,
@@ -801,6 +1039,7 @@ def execute_mail_action(
         return {
             "action": "category_only",
             "destination": None,
+            "destinations": [],
             "categories": categories,
             "status_message": (
                 "Ingen regel valgt. "
@@ -810,21 +1049,71 @@ def execute_mail_action(
         }
 
     # -------------------------------------------------
-    # DESTINATION ER EN MAILADRESSE
+    # DESTINATIONEN INDEHOLDER MAILADRESSER
     # -------------------------------------------------
-
-    if destination_is_email(
+    if destination_contains_email(
         destination
     ):
+        validation_result = (
+            validate_email_destinations(
+                destination
+            )
+        )
 
-        # Dette er den afgørende sikkerhedskontrol.
-        #
-        # Der kaldes ikke forward_mail, før adressen
-        # er godkendt.
+        destinations = validation_result[
+            "destinations"
+        ]
 
-        if not destination_email_is_allowed(
-            destination
+        invalid_destinations = validation_result[
+            "invalid_destinations"
+        ]
+
+        blocked_destinations = validation_result[
+            "blocked_destinations"
+        ]
+
+        # ---------------------------------------------
+        # UGYLDIGE MAILADRESSER
+        # ---------------------------------------------
+        if (
+            not validation_result["valid"]
+            and not blocked_destinations
         ):
+            categories = build_rule_categories(
+                rule_result=rule_result,
+                include_test=False,
+            )
+
+            categories.append(
+                "Ugyldig maildestination"
+            )
+
+            update_mail_categories(
+                user_mail=mailbox,
+                message_id=message_id,
+                categories=categories,
+            )
+
+            return {
+                "action": "invalid_email_destination",
+                "destination": destination,
+                "destinations": destinations,
+                "invalid_destinations": (
+                    invalid_destinations
+                ),
+                "blocked_destinations": [],
+                "categories": categories,
+                "status_message": (
+                    "Mailen blev ikke videresendt. "
+                    f"{validation_result['error_message']}"
+                ),
+                "simulated": False,
+            }
+
+        # ---------------------------------------------
+        # BLOKEREDE MAILADRESSER
+        # ---------------------------------------------
+        if blocked_destinations:
             categories = build_rule_categories(
                 rule_result=rule_result,
                 include_test=False,
@@ -845,31 +1134,35 @@ def execute_mail_action(
                     "external_destination_blocked"
                 ),
                 "destination": destination,
+                "destinations": destinations,
+                "invalid_destinations": [],
+                "blocked_destinations": (
+                    blocked_destinations
+                ),
                 "categories": categories,
                 "status_message": (
                     "Mailen blev ikke videresendt. "
-                    "Destinationens domæne er ikke "
-                    "tilladt"
+                    "Et eller flere destinationsdomæner "
+                    "er ikke tilladt"
                 ),
                 "simulated": False,
             }
 
+        # ---------------------------------------------
+        # ALLE ADRESSER ER GODKENDT
+        # ---------------------------------------------
         explanation = build_rule_explanation(
             rule_result=rule_result,
             mailbox=mailbox,
         )
 
-        # -------------------------------------------------
-        # 1. VIDERESEND MAILEN
-        # -------------------------------------------------
-
+        # forward_mail kaldes først, når samtlige
+        # adresser er valideret og godkendt.
         forward_result = forward_mail(
             user_mail=mailbox,
             message_id=message_id,
             forward={
-                "to": [
-                    destination
-                ],
+                "to": destinations,
                 "cc": [],
                 "bcc": [],
                 "body": explanation,
@@ -877,35 +1170,23 @@ def execute_mail_action(
             },
         )
 
-        # -------------------------------------------------
-        # 2. SLET ORIGINALMAILEN
-        # -------------------------------------------------
-        #
-        # Denne kode nås kun, hvis:
-        #
-        # - domænet er tilladt
-        # - forward_mail ikke har rejst en fejl
-        #
-        # Ved en videresendelsesfejl bliver
-        # originalmailen derfor ikke slettet.
-
+        # Originalmailen slettes kun, hvis forward_mail
+        # ikke har rejst en fejl.
         delete_result = delete_mail(
             user_mail=mailbox,
             message_id=message_id,
             permanent_delete=False,
         )
 
-        # -------------------------------------------------
-        # 3. RETURNÉR RESULTAT
-        # -------------------------------------------------
-
         return {
             "action": "forward_and_delete",
             "destination": destination,
+            "destinations": destinations,
             "categories": [],
             "status_message": (
-                "Mail videresendt og flyttet "
-                "til Slettet post"
+                f"Mail videresendt til "
+                f"{len(destinations)} modtager(e) og "
+                "flyttet til Slettet post"
             ),
             "explanation": explanation,
             "forward_result": forward_result,
@@ -914,47 +1195,8 @@ def execute_mail_action(
         }
 
     # -------------------------------------------------
-    # UGYLDIG DESTINATION MED @
-    # -------------------------------------------------
-    #
-    # Hvis destinationen indeholder @, men ikke er
-    # en gyldig enkel mailadresse, skal den ikke
-    # forsøges fortolket som en Outlook-mappe.
-
-    if "@" in destination:
-        categories = build_rule_categories(
-            rule_result=rule_result,
-            include_test=False,
-        )
-
-        categories.append(
-            "Ugyldig maildestination"
-        )
-
-        update_mail_categories(
-            user_mail=mailbox,
-            message_id=message_id,
-            categories=categories,
-        )
-
-        return {
-            "action": (
-                "invalid_email_destination"
-            ),
-            "destination": destination,
-            "categories": categories,
-            "status_message": (
-                "Mailen blev ikke videresendt. "
-                "Destinationen er ikke en gyldig "
-                "mailadresse"
-            ),
-            "simulated": False,
-        }
-
-    # -------------------------------------------------
     # FLYT TIL OUTLOOK-MAPPE
     # -------------------------------------------------
-
     if destination:
         folder_id = find_folder_id(
             mailbox=mailbox,
@@ -970,6 +1212,7 @@ def execute_mail_action(
         return {
             "action": "move",
             "destination": destination,
+            "destinations": [],
             "destination_folder_id": folder_id,
             "moved_message_id": (
                 moved_mail.get("message_id")
@@ -986,7 +1229,6 @@ def execute_mail_action(
     # -------------------------------------------------
     # REGEL UDEN DESTINATION
     # -------------------------------------------------
-
     categories = build_rule_categories(
         rule_result=rule_result,
         include_test=False,
@@ -1001,6 +1243,7 @@ def execute_mail_action(
     return {
         "action": "category_only",
         "destination": None,
+        "destinations": [],
         "categories": categories,
         "status_message": (
             "Regel nåede 300 point, "
